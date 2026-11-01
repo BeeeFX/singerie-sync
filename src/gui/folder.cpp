@@ -1254,6 +1254,8 @@ SyncOptions Folder::initializeSyncOptions() const
     opt._newBigFolderSizeLimit = newFolderLimit.first ? newFolderLimit.second * 1000LL * 1000LL : -1; // convert from MB to B
     opt._confirmExternalStorage = cfgFile.confirmExternalStorage();
     opt._moveFilesToTrash = cfgFile.moveToTrash();
+    // Singerie's client shows no window: no "delete all files?" prompt; a sync folder emptied at once is held instead.
+    opt._holdWhenEverythingVanishes = true;
     opt._vfs = _vfs;
 
     const auto capsMaxConcurrentChunkUploads = account->capabilities().maxConcurrentChunkUploads();

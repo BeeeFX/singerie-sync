@@ -37,6 +37,11 @@ public:
     /** If remotely deleted files are needed to move to trash */
     bool _moveFilesToTrash = false;
 
+    /** Mass deletions without asking anyone (a client that shows no window): a sync that would delete every file of
+     * the sync folder at once is held (nothing deleted, syncHeld() emitted, the next sync tries again); any other
+     * mass deletion, past deleteFilesThreshold included, follows the server. Off: the prompt as before. */
+    bool _holdWhenEverythingVanishes = false;
+
     /** Create a virtual file for new files instead of downloading. May not be null */
     QSharedPointer<Vfs> _vfs;
 

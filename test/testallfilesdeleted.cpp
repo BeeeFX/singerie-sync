@@ -100,6 +100,91 @@ private Q_SLOTS:
                  selectiveSyncBlackList);
     }
 
+    void testEverythingVanishingIsHeld_data()
+    {
+        testAllFilesDeletedKeep_data();
+    }
+
+    /*
+     * A client that shows no window (SyncOptions::_holdWhenEverythingVanishes): when every file would be deleted
+     * at once, the sync is held (nothing deleted, no prompt, syncHeld emitted) and a later sync, once the files are
+     * back, finds everything in place.
+     */
+    void testEverythingVanishingIsHeld()
+    {
+        QFETCH(bool, deleteOnRemote);
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        auto options = fakeFolder.syncEngine().syncOptions();
+        options._holdWhenEverythingVanishes = true;
+        fakeFolder.syncEngine().setSyncOptions(options);
+        ConfigFile().setPromptDeleteFiles(true);
+        QSignalSpy prompt(&fakeFolder.syncEngine(), &SyncEngine::aboutToRemoveAllFiles);
+        QSignalSpy held(&fakeFolder.syncEngine(), &SyncEngine::syncHeld);
+
+        const auto initialState = fakeFolder.currentLocalState();
+        const auto saved = deleteOnRemote ? fakeFolder.currentRemoteState() : fakeFolder.currentLocalState();
+        auto &modifier = deleteOnRemote ? fakeFolder.remoteModifier() : static_cast<FileModifier &>(fakeFolder.localModifier());
+        const auto childrenKeys = fakeFolder.currentRemoteState().children.keys();
+        for (const auto &key : childrenKeys) {
+            modifier.remove(key);
+        }
+
+        QVERIFY(!fakeFolder.syncOnce());
+        QCOMPARE(prompt.count(), 0);
+        QCOMPARE(held.count(), 1);
+        QCOMPARE(held.first().first().value<SyncFileItem::Direction>(), deleteOnRemote ? SyncFileItem::Down : SyncFileItem::Up);
+        // Nothing deleted on the other side.
+        if (deleteOnRemote) {
+            QCOMPARE(fakeFolder.currentLocalState(), initialState);
+        } else {
+            QCOMPARE(fakeFolder.currentRemoteState(), initialState);
+        }
+
+        // Still held while the folder stays empty.
+        QVERIFY(!fakeFolder.syncOnce());
+        QCOMPARE(held.count(), 2);
+
+        // The server's files come back (its storage is mounted again): the next sync finds everything in place.
+        if (deleteOnRemote) {
+            for (auto it = saved.children.cbegin(); it != saved.children.cend(); ++it) {
+                fakeFolder.remoteModifier().children.insert(it.key(), it.value());
+            }
+            QVERIFY(fakeFolder.syncOnce());
+            QCOMPARE(fakeFolder.currentLocalState(), initialState);
+            QCOMPARE(fakeFolder.currentRemoteState(), initialState);
+        }
+        QCOMPARE(prompt.count(), 0);
+    }
+
+    /*
+     * Many deletions that leave something behind follow the server, without a prompt, past the threshold too.
+     */
+    void testManyDeletionsFollowTheServer()
+    {
+        FakeFolder fakeFolder{FileInfo{}};
+        auto options = fakeFolder.syncEngine().syncOptions();
+        options._holdWhenEverythingVanishes = true;
+        fakeFolder.syncEngine().setSyncOptions(options);
+        ConfigFile config;
+        config.setPromptDeleteFiles(true);
+        QSignalSpy prompt(&fakeFolder.syncEngine(), &SyncEngine::aboutToRemoveAllFiles);
+        QSignalSpy held(&fakeFolder.syncEngine(), &SyncEngine::syncHeld);
+
+        fakeFolder.remoteModifier().mkdir(QStringLiteral("frames"));
+        for (int i = 0; i < config.deleteFilesThreshold() + 20; ++i) {
+            fakeFolder.remoteModifier().insert(QStringLiteral("frames/frame.%1.exr").arg(i, 4, 10, QLatin1Char('0')), 16);
+        }
+        fakeFolder.remoteModifier().insert(QStringLiteral("scene.blend"), 16);
+        QVERIFY(fakeFolder.syncOnce());
+
+        fakeFolder.remoteModifier().remove(QStringLiteral("frames"));
+        QVERIFY(fakeFolder.syncOnce());
+        QCOMPARE(prompt.count(), 0);
+        QCOMPARE(held.count(), 0);
+        QVERIFY(!fakeFolder.currentLocalState().find(QStringLiteral("frames")));
+        QVERIFY(fakeFolder.currentLocalState().find(QStringLiteral("scene.blend")));
+    }
+
     void testAllFilesDeletedDelete_data()
     {
         testAllFilesDeletedKeep_data();

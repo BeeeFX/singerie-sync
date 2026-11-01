@@ -1186,6 +1186,31 @@ bool SyncEngine::handleMassDeletion()
     }
     const auto filesDeletedThresholdExceeded = deletionCounter > ConfigFile().deleteFilesThreshold();
 
+    if (_syncOptions._holdWhenEverythingVanishes) {
+        if (!allFilesDeleted) {
+            return false; // many deletions, past the threshold or not: follow them
+        }
+        int side = 0; // > 0: more deleted on the server; < 0: more deleted on this PC
+        for (const auto &it : std::as_const(_syncItems)) {
+            if (it->_instruction == CSYNC_INSTRUCTION_REMOVE) {
+                side += it->_direction == SyncFileItem::Down ? 1 : -1;
+            }
+        }
+        const auto direction = side >= 0 ? SyncFileItem::Down : SyncFileItem::Up;
+        // Every file at once is more likely a breakdown (a storage missing, an app switched off on the server, a disk
+        // gone) than a decision: hold, delete nothing, and let the next sync look again. A server that comes back
+        // un-holds it by itself.
+        qCWarning(lcEngine) << "Held:" << (direction == SyncFileItem::Down ? "the server" : "this PC") << "shows" << _localPath << "empty," << deletionCounter
+                            << "files would be deleted; nothing deleted";
+        Q_EMIT syncHeld(direction);
+        Q_EMIT syncError(direction == SyncFileItem::Down
+                             ? tr("Held: the server shows this folder empty, so nothing was deleted on this computer. The next sync looks again.")
+                             : tr("Held: this folder is empty on this computer, so nothing was deleted on the server. The next sync looks again."),
+                         ErrorCategory::GenericError);
+        finalize(false);
+        return true;
+    }
+
     if ((allFilesDeleted || filesDeletedThresholdExceeded) && displayDialog) {
         qCWarning(lcEngine) << "Many files are going to be deleted, asking the user";
         int side = 0; // > 0 means more deleted on the server.  < 0 means more deleted on the client

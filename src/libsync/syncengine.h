@@ -184,6 +184,10 @@ Q_SIGNALS:
      */
     void aboutToRemoveAllFiles(OCC::SyncFileItem::Direction direction, std::function<void(bool)> f);
 
+    /// The sync was held because every file of the sync folder would be deleted at once (SyncOptions::
+    /// _holdWhenEverythingVanishes): Down when the server shows the folder empty, Up when this PC does.
+    void syncHeld(OCC::SyncFileItem::Direction direction);
+
     // A new folder was discovered and was not synced because of the confirmation feature
     void newBigFolder(const QString &folder, bool isExternal);
 
