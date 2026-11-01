@@ -15,9 +15,12 @@
 #endif
 
 #include "application.h"
+#include "singerieprovision.h"
+
 #include "cocoainitializer.h"
-#include "theme.h"
 #include "common/utility.h"
+#include "theme.h"
+#include <iostream>
 
 #if defined(BUILD_UPDATER)
 #include "updater/updater.h"
@@ -143,6 +146,14 @@ int main(int argc, char **argv)
         return 1;
     }
 #endif
+
+    // Singerie's --provision while the client runs: it never hands the request over (it holds the app password);
+    // Singerie quits the client and asks again.
+    if (app.provisioning() && app.isRunning()) {
+        std::cout << OCC::SingerieProvision::failure(QStringLiteral("client_running"), QStringLiteral("The sync client is running; quit it first.")).constData()
+                  << std::endl;
+        return 1;
+    }
 
     // if the application is already running, notify it.
     if (app.isRunning()) {

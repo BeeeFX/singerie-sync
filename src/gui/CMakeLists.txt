@@ -66,6 +66,8 @@ set(client_SRCS
     accountsettings.cpp
     accountsetupfromcommandlinejob.h
     accountsetupfromcommandlinejob.cpp
+    singerieprovision.h
+    singerieprovision.cpp
     accountsetupcommandlinemanager.h
     accountsetupcommandlinemanager.cpp
     application.h

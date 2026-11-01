@@ -5,6 +5,7 @@
  */
 
 #include "application.h"
+#include "singerieprovision.h"
 
 #include "account.h"
 #include "accountmanager.h"
@@ -297,6 +298,14 @@ Application::Application(int &argc, char **argv)
         return;
     }
 
+    if (_provision) {
+        // One JSON line on standard input, never on the command line (it holds the app password).
+        std::string line;
+        std::getline(std::cin, line);
+        _provisionLine = QByteArray::fromStdString(line);
+        std::fill(line.begin(), line.end(), '\0');
+    }
+
     if (_quitInstance) {
         QTimer::singleShot(0, qApp, &QApplication::quit);
         return;
@@ -450,6 +459,22 @@ Application::Application(int &argc, char **argv)
         _quitInstance = true;
     }
     AccountSetupCommandLineManager::destroy();
+    if (_provision) {
+        SingerieProvision::Request request;
+        QString error;
+        if (SingerieProvision::parse(_provisionLine, &request, &error)) {
+            const auto job = new SingerieProvision(request, this);
+            QTimer::singleShot(0, job, &SingerieProvision::start);
+        } else {
+            std::cout << SingerieProvision::failure(QStringLiteral("bad_request"), error).constData() << std::endl;
+            QTimer::singleShot(0, this, [] {
+                qApp->exit(1);
+            });
+        }
+        _provisionLine.fill('\0');
+        _provisionLine.clear();
+        _quitInstance = true;
+    }
     if (_quitInstance) {
         return;
     }
@@ -1069,6 +1094,8 @@ void Application::parseOptions(const QStringList &options)
         } else if (option == QLatin1String("--debug")) {
             _logDebug = true;
             _debugMode = true;
+        } else if (option == QLatin1String("--provision")) {
+            _provision = true;
         } else if (option == QLatin1String("--background")) {
             _backgroundMode = true;
         } else if (option == QLatin1String("--version") || option == QLatin1String("-v")) {

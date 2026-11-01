@@ -66,6 +66,11 @@ public:
     void showHint(std::string errorHint);
     bool debugMode();
     [[nodiscard]] bool backgroundMode() const;
+    /// `--provision`: Singerie sets the account up from one JSON line on standard input (SingerieProvision).
+    [[nodiscard]] bool provisioning() const
+    {
+        return _provision;
+    }
     bool versionOnly(); // only display the version?
     void showVersion();
 
@@ -164,6 +169,8 @@ private:
     bool _userTriggeredConnect = false;
     bool _debugMode = false;
     bool _backgroundMode = false;
+    bool _provision = false;
+    QByteArray _provisionLine; ///< holds the app password until the provisioning starts
     bool _suppressNextEmptyAccountCheck = false;
     QUrl _uriSchemeUrl;
 
