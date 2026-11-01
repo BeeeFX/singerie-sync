@@ -1330,7 +1330,9 @@ void ConfigFile::setupDefaultExcludeFilePaths(ExcludedFiles &excludedFiles)
     ConfigFile cfg;
     const auto systemList = cfg.excludeFile(ConfigFile::SystemScope);
     const auto userList = cfg.excludeFile(ConfigFile::UserScope);
-    const auto legacyList = cfg.excludeFile(ConfigFile::LegacyScope);
+    // Only a migrated legacy client has a legacy list (never with DISABLE_ACCOUNT_MIGRATION): an empty legacy path would
+    // otherwise name a sync-exclude.lst in the current folder.
+    const auto legacyList = discoveredLegacyConfigPath().isEmpty() ? QString() : cfg.excludeFile(ConfigFile::LegacyScope);
 
     if (Theme::instance()->isBranded() && QFile::exists(systemList) && QFile::copy(systemList, userList)) {
         qCInfo(lcConfigFile) << "Overwriting user list" << userList << "with system list" << systemList;
@@ -1341,7 +1343,7 @@ void ConfigFile::setupDefaultExcludeFilePaths(ExcludedFiles &excludedFiles)
     if (!QFile::exists(userList)) {
         qCInfo(lcConfigFile) << "User defined ignore list does not exist:" << userList;
 
-        if (QFile::exists(legacyList) && QFile::copy(legacyList, userList)) {
+        if (!legacyList.isEmpty() && QFile::exists(legacyList) && QFile::copy(legacyList, userList)) {
             qCInfo(lcConfigFile) << "Migrating legacy list" << legacyList << "to user list" << userList;
 
         } else if (QFile::copy(systemList, userList)) {

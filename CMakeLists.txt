@@ -76,7 +76,11 @@ if(NOT DEFINED APPLICATION_REV_DOMAIN_INSTALLER)
 endif()
 
 option( APPLICATION_DISPLAY_LEGACY_IMPORT_DIALOG "Display legacy import dialog" ON )
-option( DISABLE_ACCOUNT_MIGRATION "Exclude legacy account migration and import" OFF )
+# Singerie Sync never imports another client's accounts and folders: with no settings of its own, the upstream
+# migration reads the official Nextcloud client's nextcloud.cfg (and its credentials) and registers that client's sync
+# folder as its own, a second provider on the member's folder (found by Singerie's end-to-end run, 2 November 2026).
+# Forced: a build folder configured before keeps the old cached value otherwise. The fork never builds the official name.
+set( DISABLE_ACCOUNT_MIGRATION ON CACHE BOOL "Exclude legacy account migration and import" FORCE )
 option( WIZARD_HIDE_SIGNUP_BUTTON "Hide the Sign up button in the account setup wizard" OFF )
 if(NOT DEFINED APPLICATION_SIGNUP_URL)
     set(APPLICATION_SIGNUP_URL "" CACHE STRING "Custom URL for the Sign up button; empty uses the default signup page")
