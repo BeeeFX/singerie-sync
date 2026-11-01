@@ -7,7 +7,9 @@
  * any purpose.
  */
 
+#include "accountmanager.h"
 #include "accountstate.h"
+#include "config.h"
 #include "configfile.h"
 #include "folderman.h"
 #include "singerieprovision.h"
@@ -29,6 +31,27 @@ private Q_SLOTS:
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
+    }
+
+    // Singerie Sync never takes another client's accounts: with no settings of its own it finds no account (the
+    // official client's nextcloud.cfg beside it is ignored) and waits for --provision.
+    void testNoLegacyImport()
+    {
+        QCOMPARE(DISABLE_ACCOUNT_MIGRATION, 1);
+        QTemporaryDir root;
+        const auto ours = root.filePath(QStringLiteral("Singerie Sync"));
+        QVERIFY(QDir().mkpath(ours));
+        QVERIFY(QDir().mkpath(root.filePath(QStringLiteral("Nextcloud"))));
+        QFile official(root.filePath(QStringLiteral("Nextcloud/nextcloud.cfg")));
+        QVERIFY(official.open(QIODevice::WriteOnly));
+        official.write(
+            "[Accounts]\nversion=13\n0\\url=https://cloud.example\n0\\dav_user=anna\n"
+            "0\\FoldersWithPlaceholders\\1\\localPath=D:/Pirouette Prod/\n");
+        official.close();
+        ConfigFile::setConfDir(ours);
+        QCOMPARE(AccountManager::instance()->restore(true), AccountManager::AccountsNotFound);
+        QVERIFY(AccountManager::instance()->accounts().isEmpty());
+        QVERIFY(ConfigFile::discoveredLegacyConfigPath().isEmpty());
     }
 
     void testParse()
