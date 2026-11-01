@@ -7,6 +7,9 @@
  * any purpose.
  */
 
+#include "account.h"
+#include "common/syncjournaldb.h"
+#include "owncloudpropagator.h"
 #include "singeriesettings.h"
 
 #include <QFile>
@@ -55,6 +58,40 @@ private Q_SLOTS:
         QCOMPARE(SingerieSettings::downloadLimitKBps(), -1);
 
         SingerieSettings::setFilePathForTests({});
+    }
+
+    void testPausedReadLive()
+    {
+        QTemporaryDir dir;
+        const auto path = dir.filePath(QStringLiteral("singerie.ini"));
+        SingerieSettings::setFilePathForTests(path);
+        QCOMPARE(SingerieSettings::syncPaused(), false);
+        write(path, "[sync]\npaused=true\n");
+        QCOMPARE(SingerieSettings::syncPaused(), true);
+        write(path, "[sync]\npaused=false\n[transfers]\nuploadLimitKBps=10\n");
+        QCOMPARE(SingerieSettings::syncPaused(), false);
+        SingerieSettings::setFilePathForTests({});
+    }
+
+    /*
+     * A23: a speed limit (KB/s) is shared by the running transfers; it no longer forces one file at a time. A
+     * relative limit (a share of the measured speed) still does.
+     */
+    void testSpeedLimitKeepsTransfersInParallel()
+    {
+        QTemporaryDir dir;
+        SyncJournalDb journal(dir.filePath(QStringLiteral(".sync_test.db")));
+        QSet<QString> blacklist;
+        OwncloudPropagator propagator(Account::create(), dir.path(), QStringLiteral("/"), &journal, blacklist);
+        SyncOptions options;
+        options._parallelNetworkJobs = 6;
+        propagator.setSyncOptions(options);
+        QCOMPARE(propagator.maximumActiveTransferJob(), 3);
+        propagator._uploadLimit = 500 * 1000;
+        propagator._downloadLimit = 2000 * 1000;
+        QCOMPARE(propagator.maximumActiveTransferJob(), 3);
+        propagator._uploadLimit = -50;
+        QCOMPARE(propagator.maximumActiveTransferJob(), 1);
     }
 };
 

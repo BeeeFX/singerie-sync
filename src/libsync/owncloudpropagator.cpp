@@ -86,10 +86,10 @@ OwncloudPropagator::~OwncloudPropagator() = default;
 
 int OwncloudPropagator::maximumActiveTransferJob()
 {
-    if (_downloadLimit != 0
-        || _uploadLimit != 0
-        || !_syncOptions._parallelNetworkJobs) {
-        // disable parallelism when there is a network limit.
+    if (_downloadLimit < 0 || _uploadLimit < 0 || !_syncOptions._parallelNetworkJobs) {
+        // disable parallelism when there is a relative network limit (a share of the measured speed). An absolute
+        // limit (KB/s, what Singerie sets) is shared between the running transfers by the bandwidth manager, so
+        // it doesn't force one file at a time (Singerie's A23).
         return 1;
     }
     return qMin(3, qCeil(_syncOptions._parallelNetworkJobs / 2.));

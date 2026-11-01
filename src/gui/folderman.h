@@ -224,6 +224,12 @@ public:
     /** Queues all folders for syncing. */
     void scheduleAllFolders();
 
+    /// Singerie's Pause (`[sync] paused` in singerie.ini, read live): no sync starts; the running one stops.
+    [[nodiscard]] bool singeriePaused() const
+    {
+        return _singeriePaused;
+    }
+
     void setDirtyProxy();
     void setDirtyNetworkLimits();
     void setDirtyNetworkLimits(const AccountPtr &account) const;
@@ -412,6 +418,8 @@ private:
     static std::unique_ptr<FolderMan> _instance;
 
     friend class ::TestFolderMan;
+    bool _singeriePaused = false;
+    QTimer _singeriePauseWatch;
 };
 
 } // namespace OCC

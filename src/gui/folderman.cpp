@@ -5,22 +5,23 @@
  */
 
 #include "folderman.h"
+#include "account.h"
+#include "accountmanager.h"
+#include "accountstate.h"
+#include "common/asserts.h"
 #include "configfile.h"
+#include "filesystem.h"
 #include "folder.h"
+#include "gui/systray.h"
+#include "lockwatcher.h"
+#include "logger.h"
+#include "singeriesettings.h"
+#include "socketapi/socketapi.h"
 #include "syncresult.h"
 #include "theme.h"
-#include "socketapi/socketapi.h"
-#include "account.h"
-#include "accountstate.h"
-#include "accountmanager.h"
-#include "filesystem.h"
-#include "lockwatcher.h"
-#include "common/asserts.h"
-#include "gui/systray.h"
-#include "logger.h"
+#include "updatee2eefolderusersmetadatajob.h"
 #include <pushnotifications.h>
 #include <syncengine.h>
-#include "updatee2eefolderusersmetadatajob.h"
 
 #ifdef Q_OS_MACOS
 #include <CoreServices/CoreServices.h>
@@ -70,6 +71,32 @@ FolderMan::FolderMan(QObject *parent)
     qCInfo(lcFolderMan) << "setting remote poll timer interval to" << polltime.count() << "msec";
     _etagPollTimer.setInterval(polltime.count());
     QObject::connect(&_etagPollTimer, &QTimer::timeout, this, &FolderMan::slotEtagPollTimerTimeout);
+
+    // Singerie's Pause, read live from singerie.ini: when it turns on, the running sync stops and none starts; when it
+    // turns off, every folder syncs again.
+    _singeriePaused = SingerieSettings::syncPaused();
+    _singeriePauseWatch.setInterval(2000);
+    QObject::connect(&_singeriePauseWatch, &QTimer::timeout, this, [this] {
+        const auto paused = SingerieSettings::syncPaused();
+        if (paused == _singeriePaused) {
+            return;
+        }
+        _singeriePaused = paused;
+        qCInfo(lcFolderMan) << "Singerie" << (paused ? "paused" : "resumed") << "the sync";
+        if (paused) {
+            for (const auto folder : std::as_const(_folderMap)) {
+                if (folder->isSyncRunning()) {
+                    folder->slotTerminateSync();
+                }
+            }
+        } else {
+            scheduleAllFolders();
+        }
+        for (const auto folder : std::as_const(_folderMap)) {
+            Q_EMIT folder->syncStateChange();
+        }
+    });
+    _singeriePauseWatch.start();
     _etagPollTimer.start();
 
     _startScheduledSyncTimer.setSingleShot(true);
@@ -1073,6 +1100,11 @@ void FolderMan::slotStartScheduledFolderSync()
 
     if (!_syncEnabled) {
         qCInfo(lcFolderMan) << "FolderMan: Syncing is disabled, no scheduling.";
+        return;
+    }
+
+    if (_singeriePaused) {
+        qCInfo(lcFolderMan) << "FolderMan: Singerie paused the sync, no scheduling.";
         return;
     }
 

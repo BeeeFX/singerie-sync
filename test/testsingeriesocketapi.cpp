@@ -212,6 +212,32 @@ private Q_SLOTS:
     }
 
     /*
+     * Singerie's Pause ([sync] paused in singerie.ini) is read live: the status says paused, and back.
+     */
+    void testPauseReadLive()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.path());
+        QVERIFY(FolderMan::instance());
+        RecordingListener listener;
+        QVERIFY(!FolderMan::instance()->singeriePaused());
+        {
+            QFile ini(ConfigFile().configPath() + QStringLiteral("singerie.ini"));
+            QVERIFY(ini.open(QIODevice::WriteOnly));
+            ini.write("[sync]\npaused=true\n");
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(FolderMan::instance()->singeriePaused(), 10000);
+        QCOMPARE(ask(QStringLiteral("SINGERIE_STATUS"), {}, listener).value(QStringLiteral("state")).toString(), QStringLiteral("paused"));
+        {
+            QFile ini(ConfigFile().configPath() + QStringLiteral("singerie.ini"));
+            QVERIFY(ini.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            ini.write("[sync]\npaused=false\n[transfers]\nuploadLimitKBps=1\n");
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!FolderMan::instance()->singeriePaused(), 10000);
+    }
+
+    /*
      * Through the real pipe: SINGERIE_HELLO answers one line.
      */
     void testThroughThePipe()
