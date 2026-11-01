@@ -217,13 +217,8 @@ void ConfigFile::setShowQuotaWarningNotifications(bool show)
 
 bool ConfigFile::showInExplorerNavigationPane() const
 {
-    const bool defaultValue =
-#ifdef Q_OS_WIN
-        QOperatingSystemVersion::current() >= QOperatingSystemVersion::Windows10;
-#else
-        false
-#endif
-        ;
+    // Singerie's client: no Explorer navigation-pane entry unless asked for (Singerie's drive is the way in).
+    const bool defaultValue = false;
     QSettings settings(configFile(), QSettings::IniFormat);
     return settings.value(showInExplorerNavigationPaneC, defaultValue).toBool();
 }

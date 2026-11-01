@@ -10,15 +10,25 @@ if(NEXTCLOUD_DEV)
     set( APPLICATION_EXECUTABLE "nextclouddev" )
     set( APPLICATION_ICON_NAME  "Nextcloud" )
 else()
-    set( APPLICATION_NAME       "Nextcloud" )
-    set( APPLICATION_SHORTNAME  "Nextcloud" )
-    set( APPLICATION_EXECUTABLE "nextcloud" )
-    set( APPLICATION_ICON_NAME  "${APPLICATION_SHORTNAME}" )
+    # Singerie's client, this fork's release name: its own name, program, config folder (%APPDATA%\SingerieSync),
+    # config file (singeriesync.cfg), socket pipe (\\.\pipe\singeriesync-<user>), single-instance lock, sync-root
+    # provider and Explorer ids (CMakeLists.txt), so it never meets an installed official Nextcloud client. The
+    # upstream "Nextcloud" name is never built from this fork: it would collide with that client.
+    set( APPLICATION_NAME       "Singerie Sync" )
+    set( APPLICATION_SHORTNAME  "SingerieSync" )
+    set( APPLICATION_EXECUTABLE "singeriesync" )
+    set( APPLICATION_ICON_NAME  "Nextcloud" )
+    set( SINGERIE_RELEASE_NAME ON )
 endif()
 
 set( APPLICATION_CONFIG_NAME "${APPLICATION_EXECUTABLE}" )
 set( APPLICATION_DOMAIN     "nextcloud.com" )
-set( APPLICATION_VENDOR     "Nextcloud GmbH" )
+if(SINGERIE_RELEASE_NAME)
+    # A modified build: not Nextcloud GmbH's (the README's trademark notice).
+    set( APPLICATION_VENDOR "Pirouette Prod" )
+else()
+    set( APPLICATION_VENDOR "Nextcloud GmbH" )
+endif()
 set( APPLICATION_UPDATE_URL "https://updates.nextcloud.org/client/" CACHE STRING "URL for updater" )
 set( APPLICATION_HELP_URL   "" CACHE STRING "URL for the help menu" )
 
@@ -81,7 +91,11 @@ endif()
 set( APPLICATION_ICON_SET   "SVG" )
 set( APPLICATION_SERVER_URL "" CACHE STRING "URL for the server to use. If entered, the UI field will be pre-filled with it" )
 set( APPLICATION_SERVER_URL_ENFORCE ON ) # If set and APPLICATION_SERVER_URL is defined, the server can only connect to the pre-defined URL
-set( APPLICATION_REV_DOMAIN "com.nextcloud.desktopclient" )
+if(SINGERIE_RELEASE_NAME)
+    set( APPLICATION_REV_DOMAIN "fr.pirouetteprod.singeriesync" )
+else()
+    set( APPLICATION_REV_DOMAIN "com.nextcloud.desktopclient" )
+endif()
 set( APPLICATION_REV_DOMAIN_DBUS "desktopclient.nextcloud.com" )
 set( DEVELOPMENT_TEAM "NKUJUXUJ3B" CACHE STRING "Apple Development Team ID" )
 set( APPLICATION_VIRTUALFILE_SUFFIX "nextcloud" CACHE STRING "Virtual file suffix (not including the .)")
