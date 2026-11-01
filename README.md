@@ -3,6 +3,29 @@
   - SPDX-FileCopyrightText: 2011 Nextcloud GmbH and Nextcloud contributors
   - SPDX-License-Identifier: GPL-2.0-or-later
 -->
+# Singerie Sync
+
+This repository is a fork of the [Nextcloud desktop client](https://github.com/nextcloud/desktop), maintained by an
+animation collective for its own production pipeline (Singerie). Its branch `main` is Nextcloud's `stable-34.0` with a
+short list of changes on top, one commit each. It's built for Windows with virtual files, for our own members only;
+"Nextcloud" is Nextcloud GmbH's trademark and this build is not an official Nextcloud product.
+
+What it changes, and why:
+
+| Change | Why |
+|---|---|
+| A download is made read-only after it's renamed into place, not before ([nextcloud/desktop#10213](https://github.com/nextcloud/desktop/pull/10213), by Lenart Kos) | On a drive whose folders don't grant "delete subfolders and files" (a second disk), files the server keeps read-only never arrived or never updated ([#9885](https://github.com/nextcloud/desktop/issues/9885)) |
+| Deletes and renames are refused through Windows' Cloud Files API when the server doesn't allow them (`NOTIFY_DELETE`, `NOTIFY_RENAME`, answered from the journal's remote permissions) | A mistake on a PC (select all, delete) must only touch the user's own files, never shared or published ones |
+| Placeholders created when a folder is filled on demand get the server's read-only marks | They had none: read-only files could be written over locally |
+| A sync that would delete every file of the sync folder at once is held; other mass deletions are followed without a prompt | The client runs without windows; an emptied server is far more often a breakdown than a decision |
+| Settings written by the managing application in `singerie.ini`, read live (speed limits, free-space line) | No restart for a setting |
+| The user's exclude list adds to the built-in one instead of replacing it | Our patterns come from a file the application writes, never switching the client's own off |
+| No updater; a development build never touches an installed client's Windows registrations | Updates come from our application; the development build runs beside an official client |
+
+The list of patches and how they're rebuilt on a new Nextcloud release is kept with the application that installs
+this client. Everything here stays under the GNU General Public License version 2 or later, like the original
+(`COPYING`); the original README follows.
+
 # Nextcloud Desktop Client
 
 [![REUSE status](https://api.reuse.software/badge/github.com/nextcloud/desktop)](https://api.reuse.software/info/github.com/nextcloud/desktop)
