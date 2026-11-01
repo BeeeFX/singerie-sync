@@ -69,8 +69,9 @@ void NavigationPaneHelper::updateCloudStorageRegistry()
             [&entriesToRemove, &currentAppName](HKEY key, const QString &subKey) {
                 const auto appName = Utility::registryGetKeyValue(key, subKey, QStringLiteral("ApplicationName"));
                 qCDebug(lcNavPane) << "Searching for user with subKey:" << subKey << "for appName:" << appName.toString();
-                // A development build runs beside an installed client: never take that client's entries for ours.
-                const auto mayTakeUnbranded = NEXTCLOUD_DEV == 0;
+                // A development build, and Singerie Sync, run beside an installed client: never take that client's
+                // entries for ours (only a build named "Nextcloud" itself may).
+                const auto mayTakeUnbranded = currentAppName == unbrandedApplicationName;
                 if (appName.toString() == currentAppName || (mayTakeUnbranded && appName.toString() == unbrandedApplicationName)) {
                     QUuid clsid{ subKey };
                     Q_ASSERT(!clsid.isNull());
