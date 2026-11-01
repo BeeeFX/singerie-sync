@@ -1187,28 +1187,54 @@ bool SyncEngine::handleMassDeletion()
     const auto filesDeletedThresholdExceeded = deletionCounter > ConfigFile().deleteFilesThreshold();
 
     if (_syncOptions._holdWhenEverythingVanishes) {
-        if (!allFilesDeleted) {
-            return false; // many deletions, past the threshold or not: follow them
-        }
         int side = 0; // > 0: more deleted on the server; < 0: more deleted on this PC
         for (const auto &it : std::as_const(_syncItems)) {
             if (it->_instruction == CSYNC_INSTRUCTION_REMOVE) {
                 side += it->_direction == SyncFileItem::Down ? 1 : -1;
             }
         }
-        const auto direction = side >= 0 ? SyncFileItem::Down : SyncFileItem::Up;
-        // Every file at once is more likely a breakdown (a storage missing, an app switched off on the server, a disk
-        // gone) than a decision: hold, delete nothing, and let the next sync look again. A server that comes back
-        // un-holds it by itself.
-        qCWarning(lcEngine) << "Held:" << (direction == SyncFileItem::Down ? "the server" : "this PC") << "shows" << _localPath << "empty," << deletionCounter
-                            << "files would be deleted; nothing deleted";
-        Q_EMIT syncHeld(direction);
-        Q_EMIT syncError(direction == SyncFileItem::Down
-                             ? tr("Held: the server shows this folder empty, so nothing was deleted on this computer. The next sync looks again.")
-                             : tr("Held: this folder is empty on this computer, so nothing was deleted on the server. The next sync looks again."),
-                         ErrorCategory::GenericError);
-        finalize(false);
-        return true;
+        if (allFilesDeleted && side >= 0) {
+            if (_syncOptions._releaseHold) {
+                // The managing application checked: the member really left what was the whole sync folder.
+                qCWarning(lcEngine) << "Hold released: following the server that shows" << _localPath << "empty," << deletionCounter << "files deleted";
+                return false;
+            }
+            // Every file at once is more likely a breakdown (a storage missing, an app switched off on the server)
+            // than a decision: hold, delete nothing, and let the next sync look again. A server that comes back
+            // un-holds it by itself.
+            qCWarning(lcEngine) << "Held: the server shows" << _localPath << "empty," << deletionCounter << "files would be deleted; nothing deleted";
+            Q_EMIT syncHeld(SyncFileItem::Down);
+            Q_EMIT syncError(tr("Held: the server shows this folder empty, so nothing was deleted on this computer. The next sync looks again."),
+                             ErrorCategory::GenericError);
+            finalize(false);
+            return true;
+        }
+
+        // A local wipe: every one of the member's own files deleted on this PC at once (or the whole folder emptied
+        // here: a disk gone, a mistaken select-all). Nothing goes to the server until someone answers.
+        const auto answer = _syncOptions._localWipeAnswer;
+        if (answer == SyncOptions::LocalWipeAnswer::PutBack) {
+            const auto count = putBackLocalDeletions();
+            qCWarning(lcEngine) << "Local wipe answered: putting back" << count << "deleted items of" << _localPath;
+            Q_EMIT localWipeAnswered(count);
+            return false;
+        }
+        const auto wiped = localWipeCount(allFilesDeleted && side < 0);
+        if (answer == SyncOptions::LocalWipeAnswer::DeleteEverywhere) {
+            qCWarning(lcEngine) << "Local wipe answered: deleting" << wiped << "files on the server too";
+            Q_EMIT localWipeAnswered(wiped);
+            return false;
+        }
+        if (wiped > 0) {
+            qCWarning(lcEngine) << "Held: a local wipe," << wiped << "of the member's own files deleted on this PC at once in" << _localPath
+                                << "; nothing deleted on the server";
+            Q_EMIT localWipeHeld(wiped);
+            Q_EMIT syncError(tr("Held: %n of your files were deleted on this computer at once, so nothing was deleted on the server yet.", "", wiped),
+                             ErrorCategory::GenericError);
+            finalize(false);
+            return true;
+        }
+        return false; // many deletions, past the threshold or not: follow them
     }
 
     if ((allFilesDeleted || filesDeletedThresholdExceeded) && displayDialog) {
@@ -1226,6 +1252,91 @@ bool SyncEngine::handleMassDeletion()
         return true;
     }
     return false;
+}
+
+int SyncEngine::localWipeCount(bool everythingDeleted)
+{
+    // The member's own files: those the server lets them delete (its permissions in the journal; none known: theirs).
+    const auto isOwn = [](const SyncJournalFileRecord &record) {
+        return record._remotePerm.isNull() || record._remotePerm.hasPermission(RemotePermissions::CanDelete);
+    };
+    auto removedOwn = 0;
+    auto removedFiles = 0;
+    QStringList removedFolders;
+    for (const auto &item : std::as_const(_syncItems)) {
+        if (item->_instruction != CSYNC_INSTRUCTION_REMOVE || item->_direction != SyncFileItem::Up) {
+            continue;
+        }
+        const auto insideRemovedFolder = std::any_of(removedFolders.cbegin(), removedFolders.cend(), [&item](const QString &folder) {
+            return item->_file.startsWith(folder + QLatin1Char('/'));
+        });
+        if (insideRemovedFolder) {
+            continue;
+        }
+        if (item->isDirectory()) {
+            removedFolders.append(item->_file);
+            if (!_journal->getFilesBelowPath(item->_file.toUtf8(), [&](const SyncJournalFileRecord &record) {
+                    if (record.isFile() || record.isVirtualFile()) {
+                        ++removedFiles;
+                        removedOwn += isOwn(record) ? 1 : 0;
+                    }
+                })) {
+                qCWarning(lcEngine) << "Could not count the files of the deleted folder" << item->_file;
+            }
+            continue;
+        }
+        ++removedFiles;
+        SyncJournalFileRecord record;
+        if (_journal->getFileRecord(item->_file, &record) && record.isValid()) {
+            removedOwn += isOwn(record) ? 1 : 0;
+        } else {
+            ++removedOwn;
+        }
+    }
+    if (removedFiles == 0) {
+        return 0;
+    }
+    if (everythingDeleted) {
+        return removedFiles;
+    }
+    if (removedOwn < SyncOptions::localWipeMinimumFiles) {
+        return 0;
+    }
+    auto ownFiles = 0;
+    if (!_journal->getFilesBelowPath({}, [&](const SyncJournalFileRecord &record) {
+            if ((record.isFile() || record.isVirtualFile()) && isOwn(record)) {
+                ++ownFiles;
+            }
+        })) {
+        qCWarning(lcEngine) << "Could not count the member's own files";
+        return 0;
+    }
+    return removedOwn >= ownFiles ? removedOwn : 0;
+}
+
+int SyncEngine::putBackLocalDeletions()
+{
+    auto count = 0;
+    for (const auto &item : std::as_const(_syncItems)) {
+        if (item->_instruction != CSYNC_INSTRUCTION_REMOVE || item->_direction != SyncFileItem::Up) {
+            continue;
+        }
+        // Forget it (and what was below it) and look at its parent on the server again: the next sync sees the
+        // server's item as new and brings it back. Nothing is deleted on the server.
+        if (!_journal->deleteFileRecord(item->_file, item->isDirectory())) {
+            qCWarning(lcEngine) << "Could not forget the deleted item" << item->_file;
+            continue;
+        }
+        _journal->schedulePathForRemoteDiscovery(item->_file);
+        item->_instruction = CSYNC_INSTRUCTION_NONE;
+        item->_direction = SyncFileItem::None;
+        ++count;
+    }
+    if (count > 0) {
+        _journal->commit(QStringLiteral("put back a local wipe"));
+        _anotherSyncNeeded = ImmediateFollowUp;
+    }
+    return count;
 }
 
 void SyncEngine::handleRemnantReadOnlyFolders()

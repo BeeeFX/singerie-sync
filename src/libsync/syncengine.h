@@ -188,6 +188,14 @@ Q_SIGNALS:
     /// _holdWhenEverythingVanishes): Down when the server shows the folder empty, Up when this PC does.
     void syncHeld(OCC::SyncFileItem::Direction direction);
 
+    /// A local wipe was held (SyncOptions::_localWipeAnswer None): `count` of the member's own files were deleted on
+    /// this PC at once, nothing was deleted on the server.
+    void localWipeHeld(int count);
+
+    /// A held local wipe was answered in this sync: `count` deletions went to the server (DeleteEverywhere) or are
+    /// brought back from it (PutBack).
+    void localWipeAnswered(int count);
+
     // A new folder was discovered and was not synced because of the confirmation feature
     void newBigFolder(const QString &folder, bool isExternal);
 
@@ -369,6 +377,12 @@ private:
     [[nodiscard]] bool shouldRestartSync() const;
 
     bool handleMassDeletion();
+
+    /// The number of the member's own files this sync would delete on the server when that is a local wipe
+    /// (SyncOptions::_localWipeAnswer), else 0.
+    int localWipeCount(bool everythingDeleted);
+    /// Drops this sync's local deletions and forgets them in the journal, so the next sync brings them back.
+    int putBackLocalDeletions();
 
     void handleRemnantReadOnlyFolders();
 

@@ -42,6 +42,24 @@ public:
      * mass deletion, past deleteFilesThreshold included, follows the server. Off: the prompt as before. */
     bool _holdWhenEverythingVanishes = false;
 
+    /** With _holdWhenEverythingVanishes: the next sync follows a server that shows the whole sync folder empty
+     * instead of holding it (the managing application checked that the member really left: SINGERIE_RELEASE_HOLD). */
+    bool _releaseHold = false;
+
+    /** With _holdWhenEverythingVanishes, a local wipe (every one of the member's own files deleted on this PC at once,
+     * or the whole sync folder emptied on this PC) is held: nothing deleted on the server until someone answers.
+     * The answer applies to the next sync only. */
+    enum class LocalWipeAnswer {
+        None, ///< hold it (and say so: SyncEngine::localWipeHeld)
+        DeleteEverywhere, ///< the deletes go to the server
+        PutBack, ///< the deleted files come back from the server; nothing deleted on the server
+    };
+    LocalWipeAnswer _localWipeAnswer = LocalWipeAnswer::None;
+
+    /** The smallest number of the member's own files whose deletion at once counts as a local wipe (fewer is an
+     * ordinary delete and follows). The whole sync folder emptied on this PC is a wipe whatever its size. */
+    static constexpr int localWipeMinimumFiles = 10;
+
     /** Create a virtual file for new files instead of downloading. May not be null */
     QSharedPointer<Vfs> _vfs;
 
