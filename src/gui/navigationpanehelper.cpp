@@ -6,6 +6,7 @@
 
 #include "navigationpanehelper.h"
 #include "accountmanager.h"
+#include "config.h"
 #include "configfile.h"
 #include "folderman.h"
 
@@ -68,7 +69,9 @@ void NavigationPaneHelper::updateCloudStorageRegistry()
             [&entriesToRemove, &currentAppName](HKEY key, const QString &subKey) {
                 const auto appName = Utility::registryGetKeyValue(key, subKey, QStringLiteral("ApplicationName"));
                 qCDebug(lcNavPane) << "Searching for user with subKey:" << subKey << "for appName:" << appName.toString();
-                if (appName.toString() == currentAppName || appName.toString() == unbrandedApplicationName) {
+                // A development build runs beside an installed client: never take that client's entries for ours.
+                const auto mayTakeUnbranded = NEXTCLOUD_DEV == 0;
+                if (appName.toString() == currentAppName || (mayTakeUnbranded && appName.toString() == unbrandedApplicationName)) {
                     QUuid clsid{ subKey };
                     Q_ASSERT(!clsid.isNull());
                     entriesToRemove.append(clsid);
