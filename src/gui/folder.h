@@ -14,10 +14,11 @@
 #include "syncoptions.h"
 
 #include <QByteArray>
+#include <QJsonObject>
 #include <QObject>
+#include <QSet>
 #include <QStringList>
 #include <QUuid>
-#include <QSet>
 
 #include <set>
 #include <chrono>
@@ -248,6 +249,45 @@ public:
     {
         return _bin;
     }
+
+    // Singerie's socket commands (SINGERIE_*): what this sync folder holds back and what it last did.
+    /// When the server started showing this folder empty (a held sync), in Unix seconds; 0: not held.
+    [[nodiscard]] qint64 singerieHeldSince() const
+    {
+        return _singerieHeldSince;
+    }
+    /// A held local wipe: how many of the member's own files, since when; 0: none.
+    [[nodiscard]] int singerieLocalWipeCount() const
+    {
+        return _singerieWipeCount;
+    }
+    [[nodiscard]] qint64 singerieLocalWipeSince() const
+    {
+        return _singerieWipeSince;
+    }
+    /// The last sync that finished well, in Unix seconds; 0: none yet.
+    [[nodiscard]] qint64 singerieLastSync() const
+    {
+        return _singerieLastSync;
+    }
+    /// Files still to upload and download in the running sync.
+    [[nodiscard]] int singerieUp() const
+    {
+        return _singerieUp;
+    }
+    [[nodiscard]] int singerieDown() const
+    {
+        return _singerieDown;
+    }
+    /// The last finished sync's errors: (absolute path or the folder, message).
+    [[nodiscard]] QList<QPair<QString, QString>> singerieErrors() const
+    {
+        return _singerieErrors;
+    }
+    /// The next sync follows a server that shows this folder empty. False: it isn't held.
+    bool singerieReleaseHold();
+    /// The answer to a held local wipe, for the next sync: the number of files, or -1 when none is held.
+    int singerieAnswerLocalWipe(bool deleteEverywhere);
     [[nodiscard]] SyncEngine &syncEngine() const { return *_engine; }
     [[nodiscard]] Vfs &vfs() const { return *_vfs; }
 
@@ -383,6 +423,9 @@ Q_SIGNALS:
     void newBigFolderDiscovered(const QString &); // A new folder bigger than the threshold was discovered
     void syncPausedChanged(OCC::Folder *, bool paused);
     void canSyncChanged();
+
+    /// Something Singerie's socket API pushes (SINGERIE_EVENT): held, unheld, local_wipe_held, conflict, bin_changed.
+    void singerieEvent(const QJsonObject &event);
 
     /**
      * Fires for each change inside this folder that wasn't caused
@@ -600,6 +643,22 @@ private:
 
     /// Singerie's local bin of this sync folder (SingerieBin), beside it on the same drive.
     QSharedPointer<SingerieBin> _bin;
+
+    void singerieConnectEngine();
+    qint64 _singerieHeldSince = 0;
+    bool _singerieHeldThisSync = false;
+    bool _singerieReleaseHoldNext = false;
+    int _singerieWipeCount = 0;
+    qint64 _singerieWipeSince = 0;
+    bool _singerieWipeThisSync = false;
+    SyncOptions::LocalWipeAnswer _singerieWipeAnswer = SyncOptions::LocalWipeAnswer::None;
+    qint64 _singerieLastSync = 0;
+    int _singerieUp = 0;
+    int _singerieDown = 0;
+    QList<QPair<QString, QString>> _singerieErrors;
+    QList<QPair<QString, QString>> _singerieErrorsNow;
+    qint64 _singerieBinBytes = -1;
+    int _singerieBinCount = -1;
 
     QScopedPointer<SyncRunFileLog> _fileLog;
 
