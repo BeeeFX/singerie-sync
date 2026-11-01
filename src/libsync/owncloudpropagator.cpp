@@ -998,8 +998,7 @@ OwncloudPropagator::DiskSpaceResult OwncloudPropagator::diskSpaceCheck() const
     return DiskSpaceOk;
 }
 
-bool OwncloudPropagator::createConflict(const SyncFileItemPtr &item,
-    PropagatorCompositeJob *composite, QString *error)
+bool OwncloudPropagator::createConflict(const SyncFileItemPtr &item, PropagatorCompositeJob *composite, QString *error, QString *conflictFileNameOut)
 {
     QString fn = fullLocalPath(item->_file);
 
@@ -1035,6 +1034,9 @@ bool OwncloudPropagator::createConflict(const SyncFileItemPtr &item,
         return false;
     }
     qCInfo(lcPropagator) << "Created conflict file" << fn << "->" << conflictFileName;
+    if (conflictFileNameOut) {
+        *conflictFileNameOut = conflictFileName;
+    }
 
     // Create a new conflict record. To get the base etag, we need to read it from the db.
     ConflictRecord conflictRecord;

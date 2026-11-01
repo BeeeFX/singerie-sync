@@ -227,6 +227,9 @@ private Q_SLOTS:
     void conflictChecksumComputed(const QByteArray &checksumType, const QByteArray &checksum);
     /// Called to start downloading the remote file
     void startDownload();
+    /// SyncOptions::_newestSaveKeepsName: this PC's save is newer than the server's: it keeps the name, the
+    /// downloaded server file becomes the conflicted copy, and the newest goes up at the next sync.
+    void keepLocalAsNewest(const QString &filename);
     /// The local bin's copy of this very file (SyncOptions::_bin), when there is one and nothing is at its place.
     std::optional<SingerieBin::File> localBinMatch();
     /// Called when the GETFileJob finishes
@@ -263,6 +266,10 @@ private:
     bool _isEncrypted = false;
     FolderMetadata::EncryptedFile _encryptedInfo;
     ConflictRecord _conflictRecord;
+    /// The server's clock from the download's reply (its Date), Unix seconds; 0: not said.
+    qint64 _singerieServerTime = 0;
+    /// Whether this PC's newer file may keep the name in a conflict (a journal row, a date not in the future).
+    [[nodiscard]] bool singerieLocalMayWin(const QString &filename) const;
 
     QElapsedTimer _stopwatch;
 

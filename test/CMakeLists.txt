@@ -203,6 +203,7 @@ endif()
 nextcloud_add_test(LongPath)
 nextcloud_add_test(SingerieSettings)
 nextcloud_add_test(SingerieBin)
+nextcloud_add_test(SingerieConflict)
 nextcloud_add_benchmark(LargeSync)
 
 nextcloud_add_test(Account)

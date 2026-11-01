@@ -204,6 +204,9 @@ Q_SIGNALS:
     /// brought back from it (PutBack).
     void localWipeAnswered(int count);
 
+    /// Forwarded from OwncloudPropagator::conflictResolved.
+    void conflictResolved(const QString &kept, const QString &copy, bool keptFromLocal, qint64 keptMtime, qint64 copyMtime);
+
     // A new folder was discovered and was not synced because of the confirmation feature
     void newBigFolder(const QString &folder, bool isExternal);
 

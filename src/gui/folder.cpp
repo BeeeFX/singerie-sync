@@ -1270,6 +1270,8 @@ SyncOptions Folder::initializeSyncOptions() const
     opt._moveFilesToTrash = cfgFile.moveToTrash();
     // Singerie's client shows no window: no "delete all files?" prompt; a sync folder emptied at once is held instead.
     opt._holdWhenEverythingVanishes = true;
+    // In a conflict, the newest save keeps the name; the other becomes the conflicted copy (Baptiste, 2 November 2026).
+    opt._newestSaveKeepsName = true;
     opt._bin = _bin;
     opt._vfs = _vfs;
 

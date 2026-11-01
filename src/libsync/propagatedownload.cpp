@@ -854,6 +854,17 @@ void PropagateDownloadFile::slotGetFinished()
 
     _item->_httpErrorCode = job->reply()->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     _item->_requestId = job->requestId();
+    // The server's clock, for "the newest save keeps the name" (SYNC-13).
+    if (const auto date = job->reply()->rawHeader("Date"); !date.isEmpty()) {
+        auto when = QDateTime::fromString(QString::fromLatin1(date), Qt::RFC2822Date);
+        if (!when.isValid()) {
+            when = QLocale::c().toDateTime(QString::fromLatin1(date).trimmed(), QStringLiteral("ddd, dd MMM yyyy HH:mm:ss 'GMT'"));
+            when.setTimeZone(QTimeZone::UTC);
+        }
+        if (when.isValid()) {
+            _singerieServerTime = when.toSecsSinceEpoch();
+        }
+    }
 
     QNetworkReply::NetworkError err = job->reply()->error();
     if (err != QNetworkReply::NoError) {
@@ -1234,6 +1245,13 @@ void PropagateDownloadFile::downloadFinished()
     }
 
     auto previousFileExists = FileSystem::fileExists(filename) && _item->_instruction != CSYNC_INSTRUCTION_CASE_CLASH_CONFLICT;
+    if (previousFileExists && _item->_instruction == CSYNC_INSTRUCTION_CONFLICT && propagator()->syncOptions()._newestSaveKeepsName
+        && !FileSystem::isDir(filename) && FileSystem::getModTime(filename) > _item->_modtime
+        && (_item->_remotePerm.isNull() || _item->_remotePerm.hasPermission(RemotePermissions::CanWrite))
+        && !FileSystem::fileEquals(filename, _tmpFile.fileName()) && singerieLocalMayWin(filename)) {
+        keepLocalAsNewest(filename);
+        return;
+    }
     if (previousFileExists) {
         // Preserve the existing file permissions.
         const auto existingFile = QFileInfo{filename};
@@ -1288,11 +1306,14 @@ void PropagateDownloadFile::downloadFinished()
             return;
         } else {
             QString error;
-            if (!propagator()->createConflict(_item, _associatedComposite, &error)) {
+            QString conflictFileName;
+            const auto localMtime = FileSystem::getModTime(filename);
+            if (!propagator()->createConflict(_item, _associatedComposite, &error, &conflictFileName)) {
                 done(SyncFileItem::SoftError, error, ErrorCategory::GenericError);
                 return;
             } else {
                 previousFileExists = false;
+                Q_EMIT propagator()->conflictResolved(_item->_file, conflictFileName, false, _item->_modtime, localMtime);
             }
         }
     }
@@ -1400,6 +1421,70 @@ void PropagateDownloadFile::downloadFinished()
     }
 
     updateMetadata(isConflict);
+}
+
+bool PropagateDownloadFile::singerieLocalMayWin(const QString &filename) const
+{
+    // Only a real edit on both sides (SYNC-3): with no journal row (the first sync of an adopted, moved or taken-back
+    // folder, files copied in by hand) upstream's rule applies and the server keeps the name.
+    SyncJournalFileRecord record;
+    if (!propagator()->_journal->getFileRecord(_item->_file, &record) || !record.isValid()) {
+        qCInfo(lcPropagateDownload) << "Conflict on" << _item->_file << "with no journal record: the server's file keeps the name";
+        return false;
+    }
+    // A date in the future doesn't win (SYNC-13): against the server's clock (this reply's Date), else this PC's.
+    const auto clock = _singerieServerTime > 0 ? _singerieServerTime : QDateTime::currentSecsSinceEpoch();
+    const auto localMtime = FileSystem::getModTime(filename);
+    if (localMtime > clock + 10 * 60) {
+        qCWarning(lcPropagateDownload) << "Conflict on" << _item->_file << ": this PC's file is dated" << localMtime - clock
+                                       << "s in the future (is this PC's clock ahead?): the server's file keeps the name";
+        return false;
+    }
+    return true;
+}
+
+void PropagateDownloadFile::keepLocalAsNewest(const QString &filename)
+{
+    const auto localMtime = FileSystem::getModTime(filename);
+    if (!FileSystem::verifyFileUnchanged(filename, _item->_previousSize, _item->_previousModtime)) {
+        FileSystem::remove(_tmpFile.fileName());
+        propagator()->_anotherSyncNeeded = true;
+        done(SyncFileItem::SoftError, tr("File has changed since discovery"), ErrorCategory::GenericError);
+        return;
+    }
+    // The server's file, which is older, becomes the conflicted copy (named after its own date); this PC's newer save
+    // keeps the name.
+    const auto copyName = Utility::makeConflictFileName(_item->_file, Utility::qDateTimeFromTime_t(_item->_modtime), {});
+    const auto copyPath = propagator()->fullLocalPath(copyName);
+    Q_EMIT propagator()->touchedFile(copyPath);
+    QString error;
+    if (!FileSystem::rename(_tmpFile.fileName(), copyPath, &error)) {
+        done(SyncFileItem::SoftError, error, ErrorCategory::GenericError);
+        return;
+    }
+    FileSystem::setFileHidden(copyPath, false);
+    qCInfo(lcPropagateDownload) << "Conflict: this PC's save of" << _item->_file << "is the newest (" << localMtime << ">" << _item->_modtime
+                                << "), it keeps the name; the server's file becomes" << copyName;
+
+    // The journal knows the server's file at the name: this PC's save then reads as changed here and goes up next.
+    auto record = _item->toSyncJournalFileRecordWithInode(filename);
+    record._type = ItemTypeFile;
+    if (!propagator()->_journal->setFileRecord(record)) {
+        done(SyncFileItem::FatalError, tr("Error updating metadata: %1").arg(_item->_file), ErrorCategory::GenericError);
+        return;
+    }
+    ConflictRecord conflictRecord;
+    conflictRecord.path = copyName.toUtf8();
+    conflictRecord.baseFileId = _item->_fileId;
+    conflictRecord.baseEtag = _item->_etag;
+    conflictRecord.baseModtime = _item->_modtime;
+    conflictRecord.initialBasePath = _item->_file.toUtf8();
+    propagator()->_journal->setConflictRecord(conflictRecord);
+    propagator()->_journal->setDownloadInfo(_item->_file, SyncJournalDb::DownloadInfo());
+    propagator()->_journal->commit("conflict: the newest save keeps the name");
+    propagator()->_anotherSyncNeeded = true;
+    Q_EMIT propagator()->conflictResolved(_item->_file, copyName, true, localMtime, _item->_modtime);
+    done(SyncFileItem::Conflict, {}, ErrorCategory::NoError);
 }
 
 void PropagateDownloadFile::updateMetadata(bool isConflict)

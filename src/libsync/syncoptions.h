@@ -82,6 +82,11 @@ public:
      * of deleted, and moved back instead of downloaded when the server's file comes back the same. Null: deleted. */
     QSharedPointer<SingerieBin> _bin;
 
+    /** In a conflict, the newest save (by modification time) keeps the file's name and the other becomes the
+     * conflicted copy (Singerie's client). Off: this PC's file always becomes the copy (upstream). The server's file
+     * keeps the name whenever the member may not write it. */
+    bool _newestSaveKeepsName = false;
+
     /** Create a virtual file for new files instead of downloading. May not be null */
     QSharedPointer<Vfs> _vfs;
 
