@@ -13,6 +13,7 @@
 #include "common/vfs.h"
 #include "openfilemanager.h"
 #include "owncloudpropagator.h"
+#include "singeriebin.h"
 #include "syncengine.h"
 #include "vfs/cfapi/cfapiprotection.h"
 #include "vfs/cfapi/cfapiwrapper.h"
@@ -20,6 +21,7 @@
 #include <QEventLoop>
 #include <QProcess>
 #include <QTimer>
+#include <QUuid>
 #include <QtTest>
 
 using namespace Qt::StringLiterals;
@@ -692,6 +694,53 @@ private Q_SLOTS:
         QVERIFY(itemInstruction(completeSpy, "A/a1", CSYNC_INSTRUCTION_SYNC));
         CFVERIFY_NONVIRTUAL(fakeFolder, "A/a1");
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
+    }
+
+    /*
+     * Singerie's local bin with virtual files: a hydrated file the server deletes goes to the bin; when it comes back
+     * the same on the server, it comes back whole from the bin (not as an empty placeholder), nothing downloaded.
+     */
+    void testLocalBinRestoresWholeFile()
+    {
+        FakeFolder fakeFolder{FileInfo()};
+        setupVfs(fakeFolder);
+        const auto bin = QSharedPointer<SingerieBin>::create(fakeFolder.localPath(), QUuid::createUuid().toString(QUuid::Id128).left(12));
+        auto options = fakeFolder.syncEngine().syncOptions();
+        options._bin = bin;
+        fakeFolder.syncEngine().setSyncOptions(options);
+        auto gets = 0;
+        fakeFolder.setServerOverride([&gets](QNetworkAccessManager::Operation op, const QNetworkRequest &, QIODevice *) -> QNetworkReply * {
+            if (op == QNetworkAccessManager::GetOperation) {
+                ++gets;
+            }
+            return nullptr;
+        });
+
+        fakeFolder.remoteModifier().insert(QStringLiteral("frame.exr"), 64);
+        QVERIFY(fakeFolder.syncOnce());
+        CFVERIFY_VIRTUAL(fakeFolder, "frame.exr");
+        triggerDownload(fakeFolder, "frame.exr");
+        QVERIFY(fakeFolder.syncOnce());
+        CFVERIFY_NONVIRTUAL(fakeFolder, "frame.exr");
+
+        const auto frame = *fakeFolder.remoteModifier().find(QStringLiteral("frame.exr"));
+        fakeFolder.remoteModifier().remove(QStringLiteral("frame.exr"));
+        QVERIFY(fakeFolder.syncOnce());
+        CFVERIFY_GONE(fakeFolder, "frame.exr");
+        QCOMPARE(bin->summary().count, 1);
+
+        gets = 0;
+        fakeFolder.remoteModifier().insert(QStringLiteral("frame.exr"), frame.size, frame.contentChar);
+        auto *back = fakeFolder.remoteModifier().find(QStringLiteral("frame.exr"));
+        back->fileId = frame.fileId;
+        back->etag = frame.etag;
+        back->lastModified = frame.lastModified;
+        QVERIFY(fakeFolder.syncOnce());
+        CFVERIFY_NONVIRTUAL(fakeFolder, "frame.exr");
+        QCOMPARE(gets, 0);
+        QCOMPARE(bin->summary().count, 0);
+        QDir(bin->folder()).removeRecursively();
+        QDir().rmdir(QFileInfo(bin->folder()).absolutePath());
     }
 
     void testNewFilesNotVirtual()
