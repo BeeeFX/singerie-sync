@@ -87,6 +87,12 @@ public:
      * keeps the name whenever the member may not write it. */
     bool _newestSaveKeepsName = false;
 
+    /** Files changed less than this long ago go up in chunks, whatever their size, so the server only puts the file
+     * in place (the final MOVE) once it is whole: a file still growing is never left truncated on the server (Singerie's
+     * A10). Before the MOVE the client checks the file is still the size and time it sent. 0: upstream's way (chunks
+     * only above the chunk size). */
+    std::chrono::seconds _wholeUploadAge = std::chrono::seconds(0);
+
     /** Create a virtual file for new files instead of downloading. May not be null */
     QSharedPointer<Vfs> _vfs;
 

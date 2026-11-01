@@ -1284,6 +1284,8 @@ SyncOptions Folder::initializeSyncOptions()
     opt._holdWhenEverythingVanishes = true;
     // In a conflict, the newest save keeps the name; the other becomes the conflicted copy (Baptiste, 2 November 2026).
     opt._newestSaveKeepsName = true;
+    // A file changed in the last minute goes up in chunks, assembled on the server only once whole (A10).
+    opt._wholeUploadAge = std::chrono::seconds(60);
     opt._bin = _bin;
     // Singerie's answers, for the next sync only (SINGERIE_RELEASE_HOLD, SINGERIE_LOCAL_WIPE_*), and only while they
     // still answer the hold or the wipe they were given about, for ten minutes at most (SYNC-2).

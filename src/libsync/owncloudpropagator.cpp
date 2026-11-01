@@ -418,8 +418,11 @@ std::unique_ptr<PropagateUploadFileCommon> OwncloudPropagator::createUploadJob(S
 {
     auto job = std::unique_ptr<PropagateUploadFileCommon>{};
 
-    if (item->_size > syncOptions()._initialChunkSize && account()->capabilities().chunkingNg()) {
-        // Item is above _initialChunkSize, thus will be classified as to be chunked
+    const auto age = QDateTime::currentSecsSinceEpoch() - static_cast<qint64>(item->_modtime);
+    const auto justChanged = syncOptions()._wholeUploadAge.count() > 0 && age >= -10 && age < syncOptions()._wholeUploadAge.count();
+    if ((item->_size > syncOptions()._initialChunkSize || justChanged) && account()->capabilities().chunkingNg()) {
+        // Item is above _initialChunkSize, thus will be classified as to be chunked. A file changed moments ago goes
+        // up in chunks too: the server puts it in place only once it is whole (SyncOptions::_wholeUploadAge).
         job = std::make_unique<PropagateUploadFileNG>(this, item);
     } else {
         job = std::make_unique<PropagateUploadFileV1>(this, item);
