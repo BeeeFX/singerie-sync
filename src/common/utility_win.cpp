@@ -178,7 +178,7 @@ void Utility::setupFavLink(const QString &folder)
 
     const QDir folderDir(QDir::fromNativeSeparators(folder));
     const QString filePath = folderDir.dirName() + QLatin1String(".lnk");
-    const auto linkName = QDir().filePath(filePath);
+    const auto linkName = QDir(pathToLinks).filePath(filePath);
 
     qCDebug(lcUtility) << "Creating favorite link from" << folder << "to" << linkName;
     if (!QFile::link(folder, linkName)) {
