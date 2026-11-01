@@ -5,25 +5,26 @@
  */
 
 #include "owncloudpropagator.h"
+#include "account.h"
+#include "bulkpropagatordownloadjob.h"
+#include "bulkpropagatorjob.h"
+#include "common/asserts.h"
 #include "common/syncjournaldb.h"
 #include "common/syncjournalfilerecord.h"
+#include "common/utility.h"
+#include "discoveryphase.h"
+#include "filesystem.h"
+#include "foldermetadata.h"
 #include "propagatedownload.h"
-#include "propagateupload.h"
 #include "propagateremotedelete.h"
-#include "propagateremotemove.h"
 #include "propagateremotemkdir.h"
-#include "bulkpropagatorjob.h"
-#include "bulkpropagatordownloadjob.h"
+#include "propagateremotemove.h"
+#include "propagateupload.h"
+#include "propagatorjobs.h"
+#include "singeriesettings.h"
+#include "syncfileitem.h"
 #include "updatee2eefoldermetadatajob.h"
 #include "updatemigratede2eemetadatajob.h"
-#include "propagatorjobs.h"
-#include "filesystem.h"
-#include "common/utility.h"
-#include "account.h"
-#include "common/asserts.h"
-#include "discoveryphase.h"
-#include "syncfileitem.h"
-#include "foldermetadata.h"
 
 #ifdef Q_OS_WIN
 #include <windef.h>
@@ -64,6 +65,11 @@ qint64 criticalFreeSpaceLimit()
 
 qint64 freeSpaceLimit()
 {
+    // Singerie's keep-free line, read live (singerie.ini), before the variable read once at start.
+    if (const auto keepFree = SingerieSettings::keepFreeBytes(); keepFree >= 0) {
+        return keepFree;
+    }
+
     qint64 value = 1000 * 1000 * 1000LL;
 
     static bool hasEnv = false;

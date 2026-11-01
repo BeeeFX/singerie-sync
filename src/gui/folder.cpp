@@ -6,6 +6,7 @@
 
 #include "common/syncjournaldb.h"
 #include "config.h"
+#include "singeriesettings.h"
 
 #include "account.h"
 #include "accountmanager.h"
@@ -1301,6 +1302,14 @@ void Folder::setDirtyNetworkLimits()
         uploadLimit = account->uploadLimit() * 1000;
     } else if (useUpLimit == 0) {
         uploadLimit = 0;
+    }
+
+    // Singerie's limits (singerie.ini), read at every sync: they win over the account's own setting.
+    if (const auto limit = SingerieSettings::uploadLimitKBps(); limit >= 0) {
+        uploadLimit = static_cast<int>(limit * 1000);
+    }
+    if (const auto limit = SingerieSettings::downloadLimitKBps(); limit >= 0) {
+        downloadLimit = static_cast<int>(limit * 1000);
     }
 
     _engine->setNetworkLimits(uploadLimit, downloadLimit);
