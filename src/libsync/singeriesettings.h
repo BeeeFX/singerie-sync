@@ -19,6 +19,8 @@ namespace OCC
  *   [transfers] uploadLimitKBps, downloadLimitKBps   0 = no limit; absent = the account's own setting
  *   [space]     keepFreeBytes                        downloads stop below this much free space; absent = the
  *                                                    OWNCLOUD_FREE_SPACE_BYTES variable or the client's 1 GB
+ *   [bin]       retentionDays                        1–365, absent = 30: how long the local bin keeps a file
+ *               maxBytes                             0 or absent = no cap; else the oldest go past that size
  *
  * Each value is read on demand (a cheap check of the file's modification time), so callers ask every time.
  */
@@ -33,6 +35,10 @@ public:
     static qint64 uploadLimitKBps();
     static qint64 downloadLimitKBps();
     static qint64 keepFreeBytes();
+
+    /// The local bin's retention (days, 1–365; 30 when absent or out of range) and size cap (bytes, 0 = none).
+    static int binRetentionDays();
+    static qint64 binMaxBytes();
 };
 
 } // namespace OCC

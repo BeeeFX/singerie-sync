@@ -6,23 +6,24 @@
 
 #include "syncengine.h"
 #include "account.h"
-#include "common/filesystembase.h"
-#include "owncloudpropagator.h"
-#include "common/syncjournaldb.h"
-#include "common/syncjournalfilerecord.h"
-#include "discoveryphase.h"
-#include "creds/abstractcredentials.h"
-#include "common/syncfilestatus.h"
-#include "csync_exclude.h"
-#include "filesystem.h"
-#include "deletejob.h"
-#include "propagatedownload.h"
-#include "common/asserts.h"
-#include "configfile.h"
-#include "discovery.h"
-#include "common/vfs.h"
 #include "clientsideencryption.h"
 #include "clientsideencryptionjobs.h"
+#include "common/asserts.h"
+#include "common/filesystembase.h"
+#include "common/syncfilestatus.h"
+#include "common/syncjournaldb.h"
+#include "common/syncjournalfilerecord.h"
+#include "common/vfs.h"
+#include "configfile.h"
+#include "creds/abstractcredentials.h"
+#include "csync_exclude.h"
+#include "deletejob.h"
+#include "discovery.h"
+#include "discoveryphase.h"
+#include "filesystem.h"
+#include "owncloudpropagator.h"
+#include "propagatedownload.h"
+#include "singeriebin.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -534,6 +535,9 @@ void SyncEngine::startSync()
     s_anySyncRunning = true;
     _syncRunning = true;
     _anotherSyncNeeded = NoFollowUpSync;
+    if (_syncOptions._bin) {
+        _syncOptions._bin->cleanIfDue(); // the local bin's retention and cap (singerie.ini), at most hourly
+    }
     _clearTouchedFilesTimer.stop();
 
     _hasNoneFiles = false;

@@ -68,6 +68,8 @@ set(libsync_SRCS
     configfile.cpp
     singeriesettings.h
     singeriesettings.cpp
+    singeriebin.h
+    singeriebin.cpp
     abstractnetworkjob.h
     abstractnetworkjob.cpp
     networkjobs.h

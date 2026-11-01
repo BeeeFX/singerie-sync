@@ -5,17 +5,19 @@
  */
 #pragma once
 
+#include "clientsideencryption.h"
+#include "foldermetadata.h"
+#include "networkjobs.h"
 #include "owncloudlib.h"
 #include "owncloudpropagator.h"
-#include "networkjobs.h"
-#include "clientsideencryption.h"
+#include "singeriebin.h"
 #include <common/checksums.h>
-#include "foldermetadata.h"
 
 #include <QBuffer>
 #include <QFile>
 
 #include <filesystem>
+#include <optional>
 
 namespace OCC {
 class PropagateDownloadEncrypted;
@@ -225,6 +227,8 @@ private Q_SLOTS:
     void conflictChecksumComputed(const QByteArray &checksumType, const QByteArray &checksum);
     /// Called to start downloading the remote file
     void startDownload();
+    /// The local bin's copy of this very file (SyncOptions::_bin), when there is one and nothing is at its place.
+    std::optional<SingerieBin::File> localBinMatch();
     /// Called when the GETFileJob finishes
     void slotGetFinished();
     /// Called when the download's checksum header was validated

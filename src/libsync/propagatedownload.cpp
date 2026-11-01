@@ -4,22 +4,23 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-#include "config.h"
-#include "libsync/creds/abstractcredentials.h"
-#include "owncloudpropagator_p.h"
 #include "propagatedownload.h"
-#include "networkjobs.h"
 #include "account.h"
+#include "clientsideencryptionjobs.h"
 #include "common/syncjournaldb.h"
 #include "common/syncjournalfilerecord.h"
 #include "common/utility.h"
+#include "common/vfs.h"
+#include "config.h"
 #include "filesystem.h"
+#include "libsync/creds/abstractcredentials.h"
+#include "networkjobs.h"
+#include "owncloudpropagator_p.h"
+#include "propagatedownloadencrypted.h"
 #include "propagatorjobs.h"
+#include "singeriebin.h"
 #include <common/asserts.h>
 #include <common/constants.h>
-#include "clientsideencryptionjobs.h"
-#include "propagatedownloadencrypted.h"
-#include "common/vfs.h"
 
 #include <QLoggingCategory>
 #include <QNetworkAccessManager>
@@ -539,6 +540,11 @@ void PropagateDownloadFile::startAfterIsEncryptedIsChecked()
         qCWarning(lcPropagateDownload) << "ignored virtual file type of" << _item->_file;
         _item->_type = ItemTypeFile;
     }
+    if (_item->_type == ItemTypeVirtualFile && localBinMatch()) {
+        // The local bin holds this very file in full: put it back whole instead of making an empty placeholder.
+        qCInfo(lcPropagateDownload) << "the local bin holds" << _item->_file << ", restoring it instead of a placeholder";
+        _item->_type = ItemTypeFile;
+    }
     if (_item->_type == ItemTypeVirtualFile && !propagator()->localFileNameClash(_item->_file)) {
         qCDebug(lcPropagateDownload) << "creating virtual file" << _item->_file;
 
@@ -680,6 +686,19 @@ void PropagateDownloadFile::startDownload()
     _tmpFile.setFileName(propagator()->fullLocalPath(tmpFileName));
     makeParentFolderModifiable(_tmpFile.fileName());
 
+    // Singerie's local bin: the same file deleted on the server earlier and kept on this PC goes back instead of
+    // being downloaded (it then counts as a complete download, below).
+    if (!_tmpFile.exists() && _item->_instruction != CSYNC_INSTRUCTION_CONFLICT) {
+        if (const auto match = localBinMatch()) {
+            QString error;
+            if (propagator()->syncOptions()._bin->moveOut(*match, _tmpFile.fileName(), &error)) {
+                qCInfo(lcPropagateDownload) << "restored" << _item->_file << "from the local bin," << _item->_size << "bytes not downloaded";
+            } else {
+                qCWarning(lcPropagateDownload) << "could not restore" << _item->_file << "from the local bin, downloading it:" << error;
+            }
+        }
+    }
+
     // Can't open(Append) read-only files, make sure to make
     // file writable if it exists.
     // Older clients also made the temporary file read-only before renaming it, which
@@ -763,6 +782,16 @@ void PropagateDownloadFile::startDownload()
     connect(_job.data(), &GETFileJob::downloadProgress, this, &PropagateDownloadFile::slotDownloadProgress);
     propagator()->_activeJobList.append(this);
     _job->start();
+}
+
+std::optional<SingerieBin::File> PropagateDownloadFile::localBinMatch()
+{
+    const auto bin = propagator()->syncOptions()._bin;
+    if (!bin || !bin->isUsable() || _item->_size <= 0 || isEncrypted() || !_item->_directDownloadUrl.isEmpty()
+        || FileSystem::fileExists(propagator()->fullLocalPath(_item->_file))) {
+        return {};
+    }
+    return bin->findMatch(_item->_file, _item->_size, _item->_modtime, _item->_checksumHeader, _item->_etag, _item->_fileId);
 }
 
 qint64 PropagateDownloadFile::committedDiskSpace() const
