@@ -6,6 +6,8 @@ if (WIN32)
     add_library(nextcloudsync_vfs_cfapi SHARED
         cfapiwrapper.h
         cfapiwrapper.cpp
+        cfapiprotection.h
+        cfapiprotection.cpp
         hydrationjob.h
         hydrationjob.cpp
         vfs_cfapi.h

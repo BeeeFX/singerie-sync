@@ -4,11 +4,13 @@
  */
 
 #include "cfapiwrapper.h"
+#include "cfapiprotection.h"
 
 #include "config.h"
 
 #include "accessmanager.h"
 #include "common/filesystembase.h"
+#include "common/syncjournaldb.h"
 #include "common/utility.h"
 #include "hydrationjob.h"
 #include "theme.h"
@@ -668,6 +670,108 @@ void CALLBACK cfApiNotifyFileCloseCompletion(const CF_CALLBACK_INFO *callbackInf
     }
 }
 
+namespace
+{
+
+// Windows waits for these answers while the deleting or renaming application is blocked (60 s at
+// most): they only read the journal, never the client's main thread.
+
+QString volumePath(const CF_CALLBACK_INFO *callbackInfo, PCWSTR volumeRelativePath)
+{
+    return QString::fromWCharArray(callbackInfo->VolumeDosName) + QString::fromWCharArray(volumeRelativePath);
+}
+
+bool isIssuedByThisClient(const CF_CALLBACK_INFO *callbackInfo)
+{
+    // The client's own deletes and renames (the sync applying the server's changes) always go:
+    // the sync engine checks them itself, and waiting on it from here could deadlock.
+    return callbackInfo->ProcessInfo && callbackInfo->ProcessInfo->ProcessId == QCoreApplication::applicationPid();
+}
+
+QString requestingApplication(const CF_CALLBACK_INFO *callbackInfo)
+{
+    if (!callbackInfo->ProcessInfo) {
+        return QStringLiteral("(unknown process)");
+    }
+    return QStringLiteral("%1 (pid %2)").arg(QString::fromWCharArray(callbackInfo->ProcessInfo->ImagePath)).arg(callbackInfo->ProcessInfo->ProcessId);
+}
+
+void cfApiAck(const CF_CALLBACK_INFO *callbackInfo, CF_OPERATION_TYPE type, NTSTATUS status)
+{
+    CF_OPERATION_INFO opInfo = {0};
+    CF_OPERATION_PARAMETERS opParams = {0};
+    opInfo.StructSize = sizeof(opInfo);
+    opInfo.Type = type;
+    opInfo.ConnectionKey = callbackInfo->ConnectionKey;
+    opInfo.TransferKey = callbackInfo->TransferKey;
+    opInfo.RequestKey = callbackInfo->RequestKey;
+    if (type == CF_OPERATION_TYPE_ACK_DELETE) {
+        opParams.ParamSize = CF_SIZE_OF_OP_PARAM(AckDelete);
+        opParams.AckDelete.CompletionStatus = status;
+    } else {
+        opParams.ParamSize = CF_SIZE_OF_OP_PARAM(AckRename);
+        opParams.AckRename.CompletionStatus = status;
+    }
+    const qint64 result = CfExecute(&opInfo, &opParams);
+    if (result != S_OK) {
+        qCWarning(lcCfApiWrapper) << "Couldn't answer a delete or rename" << OCC::Utility::formatWinError(result);
+    }
+}
+
+}
+
+void CALLBACK cfApiNotifyDelete(const CF_CALLBACK_INFO *callbackInfo, const CF_CALLBACK_PARAMETERS *callbackParameters)
+{
+    const auto path = volumePath(callbackInfo, callbackInfo->NormalizedPath);
+    const auto isDirectory = (callbackParameters->Delete.Flags & CF_CALLBACK_DELETE_FLAG_IS_DIRECTORY) != 0;
+    auto decision = OCC::CfApiProtection::Decision{};
+
+    const auto isUndelete = (callbackParameters->Delete.Flags & CF_CALLBACK_DELETE_FLAG_IS_UNDELETE) != 0;
+
+    if (!isIssuedByThisClient(callbackInfo) && !isUndelete) {
+        auto vfs = reinterpret_cast<OCC::VfsCfApi *>(callbackInfo->CallbackContext);
+        const auto &params = vfs->params();
+        if (const auto relative = OCC::CfApiProtection::relativePath(params.filesystemPath, path); relative && params.journal) {
+            decision = OCC::CfApiProtection::mayDelete(*params.journal, *relative, isDirectory);
+        }
+    }
+
+    if (decision.allowed) {
+        qCDebug(lcCfApiWrapper) << "Delete allowed:" << path;
+        cfApiAck(callbackInfo, CF_OPERATION_TYPE_ACK_DELETE, STATUS_SUCCESS);
+    } else {
+        qCInfo(lcCfApiWrapper) << "Delete refused:" << path << "asked by" << requestingApplication(callbackInfo) << "-" << decision.reason;
+        cfApiAck(callbackInfo, CF_OPERATION_TYPE_ACK_DELETE, STATUS_CLOUD_FILE_ACCESS_DENIED);
+    }
+}
+
+void CALLBACK cfApiNotifyRename(const CF_CALLBACK_INFO *callbackInfo, const CF_CALLBACK_PARAMETERS *callbackParameters)
+{
+    const auto path = volumePath(callbackInfo, callbackInfo->NormalizedPath);
+    const auto target = volumePath(callbackInfo, callbackParameters->Rename.TargetPath);
+    const auto flags = callbackParameters->Rename.Flags;
+    const auto isDirectory = (flags & CF_CALLBACK_RENAME_FLAG_IS_DIRECTORY) != 0;
+    auto decision = OCC::CfApiProtection::Decision{};
+
+    if (!isIssuedByThisClient(callbackInfo) && (flags & CF_CALLBACK_RENAME_FLAG_SOURCE_IN_SCOPE)) {
+        auto vfs = reinterpret_cast<OCC::VfsCfApi *>(callbackInfo->CallbackContext);
+        const auto &params = vfs->params();
+        if (const auto relative = OCC::CfApiProtection::relativePath(params.filesystemPath, path); relative && params.journal) {
+            const auto relativeTarget = (flags & CF_CALLBACK_RENAME_FLAG_TARGET_IN_SCOPE) ? OCC::CfApiProtection::relativePath(params.filesystemPath, target)
+                                                                                          : std::optional<QString>{};
+            decision = OCC::CfApiProtection::mayRename(*params.journal, *relative, relativeTarget, isDirectory);
+        }
+    }
+
+    if (decision.allowed) {
+        qCDebug(lcCfApiWrapper) << "Rename allowed:" << path << "->" << target;
+        cfApiAck(callbackInfo, CF_OPERATION_TYPE_ACK_RENAME, STATUS_SUCCESS);
+    } else {
+        qCInfo(lcCfApiWrapper) << "Rename refused:" << path << "->" << target << "asked by" << requestingApplication(callbackInfo) << "-" << decision.reason;
+        cfApiAck(callbackInfo, CF_OPERATION_TYPE_ACK_RENAME, STATUS_CLOUD_FILE_ACCESS_DENIED);
+    }
+}
+
 CF_CALLBACK_REGISTRATION cfApiCallbacks[] = {{CF_CALLBACK_TYPE_FETCH_DATA, cfApiFetchDataCallback},
                                              {CF_CALLBACK_TYPE_CANCEL_FETCH_DATA, cfApiCancelFetchData},
                                              {CF_CALLBACK_TYPE_NOTIFY_FILE_OPEN_COMPLETION, cfApiNotifyFileOpenCompletion},
@@ -675,6 +779,8 @@ CF_CALLBACK_REGISTRATION cfApiCallbacks[] = {{CF_CALLBACK_TYPE_FETCH_DATA, cfApi
                                              {CF_CALLBACK_TYPE_VALIDATE_DATA, cfApiValidateData},
                                              {CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS, cfApiFetchPlaceHolders},
                                              {CF_CALLBACK_TYPE_CANCEL_FETCH_PLACEHOLDERS, cfApiCancelFetchPlaceHolders},
+                                             {CF_CALLBACK_TYPE_NOTIFY_DELETE, cfApiNotifyDelete},
+                                             {CF_CALLBACK_TYPE_NOTIFY_RENAME, cfApiNotifyRename},
                                              CF_CALLBACK_REGISTRATION_END};
 
 std::wstring pathForHandle(const OCC::CfApiWrapper::FileHandle &handle)

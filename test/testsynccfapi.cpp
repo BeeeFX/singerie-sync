@@ -14,8 +14,12 @@
 #include "openfilemanager.h"
 #include "owncloudpropagator.h"
 #include "syncengine.h"
+#include "vfs/cfapi/cfapiprotection.h"
 #include "vfs/cfapi/cfapiwrapper.h"
 
+#include <QEventLoop>
+#include <QProcess>
+#include <QTimer>
 #include <QtTest>
 
 using namespace Qt::StringLiterals;
@@ -123,6 +127,55 @@ QSharedPointer<Vfs> setupVfs(FakeFolder &folder)
     ::setPinState(folder.localPath(), PinState::Unspecified, cfapi::NoRecurse);
 
     return cfapiVfs;
+}
+
+// Runs a PowerShell command in another process, the way Explorer, a script or an app would delete
+// or rename something (the client's own process is always allowed). Prints "ok", or "err" and the
+// innermost exception's HRESULT.
+QString runElsewhere(const QString &command)
+{
+    QProcess process;
+    const auto script =
+        u"$ErrorActionPreference = 'Stop'; try { %1; 'ok' } catch { $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }; 'err {0:X8}' -f $e.HResult }"_s
+            .arg(command);
+    // Keep this thread's event loop running meanwhile: Windows asks the client for a folder's placeholders when the
+    // other process opens a path in it, and the client lists the folder on this thread.
+    QEventLoop loop;
+    QObject::connect(&process, &QProcess::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&process, &QProcess::errorOccurred, &loop, &QEventLoop::quit);
+    QTimer::singleShot(120000, &loop, &QEventLoop::quit);
+    process.start(u"powershell.exe"_s, {u"-NoProfile"_s, u"-NonInteractive"_s, u"-Command"_s, script});
+    loop.exec();
+    if (process.state() != QProcess::NotRunning) {
+        process.kill();
+        process.waitForFinished();
+        return u"timeout"_s;
+    }
+    return QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
+}
+
+QString psQuoted(const QString &path)
+{
+    auto native = QDir::toNativeSeparators(path);
+    return u"'%1'"_s.arg(native.replace(u"'"_s, u"''"_s));
+}
+
+// ERROR_CLOUD_FILE_ACCESS_DENIED (395) as an HRESULT: the provider (this client) said no.
+const auto cloudFileAccessDenied = u"err 8007018B"_s;
+
+SyncJournalFileRecord protectionRecord(const QByteArray &path, const char *permissions, ItemType type)
+{
+    SyncJournalFileRecord record;
+    record._path = path;
+    record._inode = qHash(path) + 1;
+    record._modtime = QDateTime::currentSecsSinceEpoch();
+    record._type = type;
+    record._etag = "etag";
+    record._fileId = path;
+    if (permissions) {
+        record._remotePerm = RemotePermissions::fromServerString(QString::fromLatin1(permissions));
+    }
+    return record;
 }
 
 class TestSyncCfApi : public QObject
@@ -2072,6 +2125,146 @@ private Q_SLOTS:
         cleanup();
         QVERIFY(fakeFolder.syncOnce());
         QCOMPARE(completeSpy.size(), 0);
+    }
+
+    // Deletes and renames answered from the server's permissions (CfApiProtection).
+    void testProtectionDecisions()
+    {
+        QTemporaryDir dir;
+        SyncJournalDb journal(dir.path() + u"/.sync_protection.db"_s);
+        // As a Team folder project shows them to a member: the project read-only ("MG"), a work
+        // area folder others may add to but not delete or rename ("RMGCK"), a colleague's file in
+        // it ("MG"), the member's own folder and files (everything: "RMGDNVCK", "RMGDNVW").
+        const QList<SyncJournalFileRecord> records = {
+            protectionRecord("Projects", "MG", ItemTypeDirectory),
+            protectionRecord("Projects/published", "MG", ItemTypeDirectory),
+            protectionRecord("Projects/published/frame.exr", "MG", ItemTypeVirtualFile),
+            protectionRecord("Projects/work", "RMGCK", ItemTypeDirectory),
+            protectionRecord("Projects/work/bob.txt", "MG", ItemTypeFile),
+            protectionRecord("Projects/work/mine", "RMGDNVCK", ItemTypeDirectory),
+            protectionRecord("Projects/work/mine/a.txt", "RMGDNVW", ItemTypeFile),
+            protectionRecord("Projects/work/mine/b.txt", "RMGDNVW", ItemTypeFile),
+            protectionRecord("Projects/work/mixed", "RMGDNVCK", ItemTypeDirectory),
+            protectionRecord("Projects/work/mixed/mine.txt", "RMGDNVW", ItemTypeFile),
+            protectionRecord("Projects/work/mixed/bobs.txt", "MG", ItemTypeFile),
+            protectionRecord("unknown.txt", nullptr, ItemTypeFile),
+        };
+        for (const auto &record : records) {
+            QVERIFY(journal.setFileRecord(record));
+        }
+
+        using namespace OCC::CfApiProtection;
+
+        // Paths: inside, the root itself, outside, case as Windows compares it.
+        QVERIFY(relativePath(u"C:/sync/"_s, u"C:\\sync\\Projects\\work"_s) == std::optional<QString>(u"Projects/work"_s));
+        QVERIFY(relativePath(u"C:/sync/"_s, u"c:\\SYNC\\Projects"_s) == std::optional<QString>(u"Projects"_s));
+        QVERIFY(relativePath(u"C:/sync/"_s, u"C:\\sync"_s) == std::optional<QString>(QString{}));
+        QVERIFY(!relativePath(u"C:/sync/"_s, u"C:\\sync2\\x"_s));
+        QVERIFY(!relativePath(u"C:/sync/"_s, u"C:\\$Recycle.Bin\\x"_s));
+
+        // Deletes.
+        QVERIFY(!mayDelete(journal, u"Projects/published/frame.exr"_s, false).allowed);
+        QVERIFY(!mayDelete(journal, u"Projects/work/bob.txt"_s, false).allowed);
+        QVERIFY(!mayDelete(journal, u"Projects/work"_s, true).allowed);
+        QVERIFY(!mayDelete(journal, u"Projects"_s, true).allowed);
+        QVERIFY(mayDelete(journal, u"Projects/work/mine/a.txt"_s, false).allowed);
+        QVERIFY(mayDelete(journal, u"Projects/work/mine"_s, true).allowed);
+        // A folder the member may delete, holding a colleague's file: refused, naming that file.
+        const auto mixed = mayDelete(journal, u"Projects/work/mixed"_s, true);
+        QVERIFY(!mixed.allowed);
+        QVERIFY(mixed.reason.contains(u"Projects/work/mixed/bobs.txt"_s));
+        // Not in the journal (a new local item) or no known permissions: allowed.
+        QVERIFY(mayDelete(journal, u"Projects/work/new.txt"_s, false).allowed);
+        QVERIFY(mayDelete(journal, u"unknown.txt"_s, false).allowed);
+        QVERIFY(mayDelete(journal, QString{}, true).allowed);
+
+        // Renames in the same folder.
+        QVERIFY(!mayRename(journal, u"Projects/work/bob.txt"_s, u"Projects/work/bob2.txt"_s, false).allowed);
+        QVERIFY(!mayRename(journal, u"Projects"_s, u"Projects2"_s, true).allowed);
+        QVERIFY(mayRename(journal, u"Projects/work/mine/a.txt"_s, u"Projects/work/mine/c.txt"_s, false).allowed);
+        QVERIFY(mayRename(journal, u"Projects/work/mine"_s, u"Projects/work/mine2"_s, true).allowed);
+        // Moves: the item's move permission, and the destination's add permission.
+        QVERIFY(!mayRename(journal, u"Projects/work/bob.txt"_s, u"Projects/work/mine/bob.txt"_s, false).allowed);
+        QVERIFY(mayRename(journal, u"Projects/work/mine/a.txt"_s, u"Projects/work/mixed/a.txt"_s, false).allowed);
+        QVERIFY(mayRename(journal, u"Projects/work/mine/a.txt"_s, u"Projects/work/a.txt"_s, false).allowed); // work gives C
+        QVERIFY(!mayRename(journal, u"Projects/work/mine/a.txt"_s, u"Projects/published/a.txt"_s, false).allowed);
+        QVERIFY(!mayRename(journal, u"Projects/work/mine"_s, u"Projects/published/mine"_s, true).allowed);
+        // Out of the sync folder (the Recycle Bin): as a delete.
+        QVERIFY(!mayRename(journal, u"Projects/work/bob.txt"_s, std::nullopt, false).allowed);
+        QVERIFY(!mayRename(journal, u"Projects/work/mixed"_s, std::nullopt, true).allowed);
+        QVERIFY(mayRename(journal, u"Projects/work/mine"_s, std::nullopt, true).allowed);
+    }
+
+    void testProtectionThroughWindows()
+    {
+        FakeFolder fakeFolder{FileInfo{}};
+        auto vfs = setupVfs(fakeFolder);
+        auto &remote = fakeFolder.remoteModifier();
+        remote.mkdir(u"published"_s);
+        remote.insert(u"published/frame.exr"_s, 64);
+        remote.mkdir(u"work"_s);
+        remote.insert(u"work/bob.txt"_s, 64);
+        remote.mkdir(u"work/mine"_s);
+        remote.insert(u"work/mine/a.txt"_s, 64);
+        remote.insert(u"work/mine/b.txt"_s, 64);
+        remote.mkdir(u"work/mixed"_s);
+        remote.insert(u"work/mixed/bobs.txt"_s, 64);
+        remote.find(u"published"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
+        remote.find(u"published/frame.exr"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
+        remote.find(u"work"_s)->permissions = RemotePermissions::fromServerString(u"RMGCK"_s);
+        remote.find(u"work/bob.txt"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
+        remote.find(u"work/mixed/bobs.txt"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
+        QVERIFY(fakeFolder.syncOnce());
+
+        const auto local = [&fakeFolder](const QString &path) {
+            return psQuoted(fakeFolder.localPath() + path);
+        };
+        const auto exists = [&fakeFolder](const QString &path) {
+            return QFileInfo::exists(fakeFolder.localPath() + path);
+        };
+        const auto refused = [](const QString &result) {
+            return result.startsWith(u"err "_s);
+        };
+
+        // Folders are filled on demand: the journal knows a folder's contents (and their permissions) once something
+        // has listed it on this PC, as Explorer does before deleting a folder. List them all from another process.
+        QCOMPARE(runElsewhere(u"Get-ChildItem -LiteralPath %1 -Recurse -Force | Out-Null"_s.arg(psQuoted(fakeFolder.localPath()))), u"ok"_s);
+
+        // Refused by this client (ERROR_CLOUD_FILE_ACCESS_DENIED): the server allows none of these.
+        QCOMPARE(runElsewhere(u"[IO.File]::Delete(%1)"_s.arg(local(u"published/frame.exr"_s))), cloudFileAccessDenied);
+        QCOMPARE(runElsewhere(u"Remove-Item -LiteralPath %1 -Force"_s.arg(local(u"work/bob.txt"_s))), cloudFileAccessDenied);
+        QCOMPARE(runElsewhere(u"Rename-Item -LiteralPath %1 -NewName bob2.txt"_s.arg(local(u"work/bob.txt"_s))), cloudFileAccessDenied);
+        QCOMPARE(runElsewhere(u"[IO.File]::Move(%1, %2)"_s.arg(local(u"work/bob.txt"_s), local(u"work/mine/bob.txt"_s))), cloudFileAccessDenied);
+        // Folders, the Recycle Bin, a move out of the sync folder: refused (the error may be the
+        // shell's or .NET's wording of the same refusal).
+        QVERIFY(refused(runElsewhere(u"[IO.Directory]::Move(%1, %2)"_s.arg(local(u"work/mixed"_s), psQuoted(fakeFolder.localPath() + u"../mixed-out"_s)))));
+        QVERIFY(refused(runElsewhere(
+            u"Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(%1, 'OnlyErrorDialogs', 'SendToRecycleBin')"_s
+                .arg(local(u"work/bob.txt"_s)))));
+        QVERIFY(refused(runElsewhere(u"Remove-Item -LiteralPath %1 -Recurse -Force"_s.arg(local(u"work/mixed"_s)))));
+        QVERIFY(refused(runElsewhere(u"Remove-Item -LiteralPath %1 -Recurse -Force"_s.arg(local(u"published"_s)))));
+        QVERIFY(exists(u"published/frame.exr"_s));
+        QVERIFY(exists(u"work/bob.txt"_s));
+        QVERIFY(!exists(u"work/bob2.txt"_s));
+        QVERIFY(!exists(u"work/mine/bob.txt"_s));
+        QVERIFY(exists(u"work/mixed/bobs.txt"_s));
+
+        // Allowed: the member's own things.
+        QCOMPARE(runElsewhere(u"Rename-Item -LiteralPath %1 -NewName c.txt"_s.arg(local(u"work/mine/a.txt"_s))), u"ok"_s);
+        QVERIFY(exists(u"work/mine/c.txt"_s));
+        QCOMPARE(runElsewhere(u"Remove-Item -LiteralPath %1 -Force"_s.arg(local(u"work/mine/c.txt"_s))), u"ok"_s);
+        QVERIFY(!exists(u"work/mine/c.txt"_s));
+        QCOMPARE(runElsewhere(u"Remove-Item -LiteralPath %1 -Recurse -Force"_s.arg(local(u"work/mine"_s))), u"ok"_s);
+        QVERIFY(!exists(u"work/mine"_s));
+
+        // The sync after: the member's deletes reach the server, everyone else's things stay. (The folders filled on
+        // demand since the last sync make the first run restart: "discovery results might be incomplete".)
+        fakeFolder.syncOnce();
+        QVERIFY(fakeFolder.syncOnce());
+        QVERIFY(!fakeFolder.currentRemoteState().find(u"work/mine"_s));
+        QVERIFY(fakeFolder.currentRemoteState().find(u"work/bob.txt"_s));
+        QVERIFY(fakeFolder.currentRemoteState().find(u"work/mixed/bobs.txt"_s));
+        QVERIFY(fakeFolder.currentRemoteState().find(u"published/frame.exr"_s));
     }
 };
 
