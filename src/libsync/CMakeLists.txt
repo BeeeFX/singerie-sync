@@ -66,6 +66,8 @@ set(libsync_SRCS
     accessmanager.cpp
     configfile.h
     configfile.cpp
+    singeriesettings.h
+    singeriesettings.cpp
     abstractnetworkjob.h
     abstractnetworkjob.cpp
     networkjobs.h

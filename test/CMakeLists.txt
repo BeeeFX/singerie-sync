@@ -201,6 +201,7 @@ elseif(LINUX) # elseif(LINUX OR APPLE)
 endif()
 
 nextcloud_add_test(LongPath)
+nextcloud_add_test(SingerieSettings)
 nextcloud_add_benchmark(LargeSync)
 
 nextcloud_add_test(Account)

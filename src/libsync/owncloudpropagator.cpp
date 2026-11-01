@@ -24,6 +24,7 @@
 #include "discoveryphase.h"
 #include "syncfileitem.h"
 #include "foldermetadata.h"
+#include "singeriesettings.h"
 
 #ifdef Q_OS_WIN
 #include <windef.h>
@@ -64,6 +65,11 @@ qint64 criticalFreeSpaceLimit()
 
 qint64 freeSpaceLimit()
 {
+    // Singerie's keep-free line, read live (singerie.ini), before the variable read once at start.
+    if (const auto keepFree = SingerieSettings::keepFreeBytes(); keepFree >= 0) {
+        return keepFree;
+    }
+
     qint64 value = 1000 * 1000 * 1000LL;
 
     static bool hasEnv = false;
