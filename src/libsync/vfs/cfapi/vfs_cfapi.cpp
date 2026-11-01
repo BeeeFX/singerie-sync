@@ -615,6 +615,21 @@ int VfsCfApi::finalizeNewPlaceholders(const QList<PlaceholderCreateInfo> &newEnt
             qCWarning(lcCfApi) << "failed: failed to update db record for" << pathString;
             return 0;
         }
+
+        // Placeholders made while a folder fills on demand get the read-only marks the sync gives the ones it makes
+        // (BulkPropagatorDownloadJob, PropagateLocalMkdir): without them a file the server doesn't let the user
+        // change could be written over on this PC, and a read-only folder filled with anything.
+        const auto &remotePerm = entryInfo.parsedProperties.remotePerm;
+        if (!remotePerm.isNull()) {
+            const auto localPath = params().filesystemPath + entryInfo.fullPath;
+            if (entryInfo.parsedProperties.isDirectory) {
+                if (!remotePerm.hasPermissionsForReadWrite()) {
+                    FileSystem::setFolderPermissions(localPath, FileSystem::FolderPermissions::ReadOnly);
+                }
+            } else if (!remotePerm.hasPermission(RemotePermissions::CanWrite)) {
+                FileSystem::setFileReadOnly(localPath, true);
+            }
+        }
     }
 
     auto folderRecord = SyncJournalFileRecord{};
