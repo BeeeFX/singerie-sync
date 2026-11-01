@@ -100,7 +100,8 @@ set( MAC_INSTALLER_BACKGROUND_FILE "${CMAKE_SOURCE_DIR}/admin/osx/installer-back
 # set( APPLICATION_LICENSE    "${OEM_THEME_DIR}/license.txt )
 
 ## Updater options
-option( BUILD_UPDATER "Build updater" ON )
+# Singerie installs and updates this client itself: no updater of its own.
+set( BUILD_UPDATER OFF CACHE BOOL "Build updater" FORCE )
 
 option( WITH_PROVIDERS "Build with providers list" ON )
 
