@@ -3,6 +3,40 @@
   - SPDX-FileCopyrightText: 2011 Nextcloud GmbH and Nextcloud contributors
   - SPDX-License-Identifier: GPL-2.0-or-later
 -->
+# Singerie Sync
+
+This repository is a fork of the [Nextcloud desktop client](https://github.com/nextcloud/desktop), maintained by an
+animation collective for its own production pipeline (Singerie). Its branch `main` is Nextcloud's `stable-34.0` with a
+short list of changes on top, one commit each. It's built for Windows with virtual files, for our own members only;
+"Nextcloud" is Nextcloud GmbH's trademark and this build is not an official Nextcloud product.
+
+What it changes, and why:
+
+| Change | Why |
+|---|---|
+| A download is made read-only after it's renamed into place, not before ([nextcloud/desktop#10213](https://github.com/nextcloud/desktop/pull/10213), by Lenart Kos) | On a drive whose folders don't grant "delete subfolders and files" (a second disk), files the server keeps read-only never arrived or never updated ([#9885](https://github.com/nextcloud/desktop/issues/9885)) |
+| Deletes and renames are refused through Windows' Cloud Files API when the server doesn't allow them (`NOTIFY_DELETE`, `NOTIFY_RENAME`, answered from the journal's remote permissions) | A mistake on a PC (select all, delete) must only touch the user's own files, never shared or published ones |
+| Placeholders created when a folder is filled on demand get the server's read-only marks | They had none: read-only files could be written over locally |
+| A sync that would delete every file of the sync folder at once is held, and so is a folder near its top (a project) the server stops showing while the rest goes on; other mass deletions are followed without a prompt | The client runs without windows; an emptied server, or one project vanishing, is far more often a breakdown than a decision |
+| Settings written by the managing application in `singerie.ini`, read live (speed limits, free-space line) | No restart for a setting |
+| The user's exclude list adds to the built-in one instead of replacing it | Our patterns come from a file the application writes, never switching the client's own off |
+| No updater; a development build never touches an installed client's Windows registrations | Updates come from our application; the development build runs beside an official client |
+| Every one of the user's own files deleted at once on the PC is held until the managing application answers (delete everywhere, or put them back); a held sync can be released by it | A mistaken select-all, or a disk gone, mustn't empty the server |
+| A local bin: files the server deletes that the PC held in full are moved beside the sync folder (its access rules copied), kept 30 days, and moved back instead of downloaded when they return unchanged | A deletion on the server costs nothing to undo |
+| In a conflict, the newest save keeps the file's name; the older becomes the conflicted copy | The latest work was the one renamed away |
+| `SINGERIE_*` socket commands and events (status, holds, the local wipe, conflicts, the bin, a scan, notifications); `--provision` from one JSON line on standard input; a pause read live; speed limits no longer one file at a time | The managing application drives the client; the app password never goes on a command line |
+| No tray icon, pop-ups, wizard, sign-in window or status polls (`SINGERIE_SHOW_UI=1` shows them again) | The managing application is the one place the user looks |
+| A file changed in the last minute goes up in chunks and is only put in place on the server if it is unchanged before the final MOVE | A file still being written never sits truncated on the server |
+| The release name is Singerie Sync (`singeriesync.exe`, its own config folder, pipe and Windows ids) | It runs beside an official client without touching it, and doesn't pass as Nextcloud's |
+| Eight files move at once by default (`[transfers] parallel`, 1–32), with as many HTTP/1.1 connections; bulk upload only when asked (`[transfers] bulkUpload`), for small files unchanged for a minute | A render's thousands of frames were three at a time; bulk upload stays off until proven, and never reads a file still being written |
+| `SINGERIE_PREFETCH`: files and folders brought onto the PC in the background, a few at once, stepping aside for the user's own sync and opens, never below the free-space line, nothing pinned | A task's files are ready before they're opened; only what was asked |
+| Progressive hydration for the file endings `[hydration] progressive` lists (video, caches read in order); every other file still arrives whole before its first read | A preview plays at once instead of after the whole file; scenes keep failing at open, never half-read |
+| A crash file (a minidump, three at most, never sent) when `singerie.ini` asks for one (`[diagnostics] crashDumps`) | A client with no window that stops leaves nothing to read otherwise |
+
+The list of patches and how they're rebuilt on a new Nextcloud release is kept with the application that installs
+this client. Everything here stays under the GNU General Public License version 2 or later, like the original
+(`COPYING`); the original README follows.
+
 # Nextcloud Desktop Client
 
 [![REUSE status](https://api.reuse.software/badge/github.com/nextcloud/desktop)](https://api.reuse.software/info/github.com/nextcloud/desktop)
