@@ -21,6 +21,13 @@ What it changes, and why:
 | Settings written by the managing application in `singerie.ini`, read live (speed limits, free-space line) | No restart for a setting |
 | The user's exclude list adds to the built-in one instead of replacing it | Our patterns come from a file the application writes, never switching the client's own off |
 | No updater; a development build never touches an installed client's Windows registrations | Updates come from our application; the development build runs beside an official client |
+| Every one of the user's own files deleted at once on the PC is held until the managing application answers (delete everywhere, or put them back); a held sync can be released by it | A mistaken select-all, or a disk gone, mustn't empty the server |
+| A local bin: files the server deletes that the PC held in full are moved beside the sync folder (its access rules copied), kept 30 days, and moved back instead of downloaded when they return unchanged | A deletion on the server costs nothing to undo |
+| In a conflict, the newest save keeps the file's name; the older becomes the conflicted copy | The latest work was the one renamed away |
+| `SINGERIE_*` socket commands and events (status, holds, the local wipe, conflicts, the bin, a scan, notifications); `--provision` from one JSON line on standard input; a pause read live; speed limits no longer one file at a time | The managing application drives the client; the app password never goes on a command line |
+| No tray icon, pop-ups, wizard, sign-in window or status polls (`SINGERIE_SHOW_UI=1` shows them again) | The managing application is the one place the user looks |
+| A file changed in the last minute goes up in chunks and is only put in place on the server if it is unchanged before the final MOVE | A file still being written never sits truncated on the server |
+| The release name is Singerie Sync (`singeriesync.exe`, its own config folder, pipe and Windows ids) | It runs beside an official client without touching it, and doesn't pass as Nextcloud's |
 
 The list of patches and how they're rebuilt on a new Nextcloud release is kept with the application that installs
 this client. Everything here stays under the GNU General Public License version 2 or later, like the original
