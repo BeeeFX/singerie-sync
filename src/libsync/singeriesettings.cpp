@@ -27,6 +27,7 @@ struct Values {
     qint64 uploadLimitKBps = -1;
     qint64 downloadLimitKBps = -1;
     qint64 keepFreeBytes = -1;
+    bool syncPaused = false;
     qint64 binRetentionDays = -1;
     qint64 binMaxBytes = -1;
 };
@@ -71,6 +72,7 @@ Values current()
         values.uploadLimitKBps = readNumber(settings, QStringLiteral("transfers/uploadLimitKBps"));
         values.downloadLimitKBps = readNumber(settings, QStringLiteral("transfers/downloadLimitKBps"));
         values.keepFreeBytes = readNumber(settings, QStringLiteral("space/keepFreeBytes"));
+        values.syncPaused = settings.value(QStringLiteral("sync/paused"), false).toBool();
         values.binRetentionDays = readNumber(settings, QStringLiteral("bin/retentionDays"));
         values.binMaxBytes = readNumber(settings, QStringLiteral("bin/maxBytes"));
         qCInfo(lcSingerieSettings) << "Read" << path << "upload limit" << values.uploadLimitKBps << "download limit" << values.downloadLimitKBps << "keep free"
@@ -109,6 +111,11 @@ qint64 SingerieSettings::downloadLimitKBps()
 qint64 SingerieSettings::keepFreeBytes()
 {
     return current().keepFreeBytes;
+}
+
+bool SingerieSettings::syncPaused()
+{
+    return current().syncPaused;
 }
 
 int SingerieSettings::binRetentionDays()

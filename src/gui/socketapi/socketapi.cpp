@@ -829,7 +829,7 @@ QJsonObject SocketApi::singerieStatus() const
     auto down = 0;
     auto syncing = false;
     auto offline = false;
-    auto paused = false;
+    auto paused = FolderMan::instance()->singeriePaused();
     auto allPaused = true;
     QString account = QStringLiteral("none");
     const auto folders = FolderMan::instance()->map();
