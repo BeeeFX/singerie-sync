@@ -12,15 +12,16 @@
 #include <QNetworkProxyFactory>
 #include <QXmlStreamReader>
 
-#include "connectionvalidator.h"
 #include "account.h"
 #include "accountstate.h"
-#include "userinfo.h"
-#include "networkjobs.h"
 #include "clientproxy.h"
+#include "connectionvalidator.h"
 #include "localnetworkpermission.h"
-#include <creds/abstractcredentials.h>
+#include "networkjobs.h"
 #include "systray.h"
+#include "theme.h"
+#include "userinfo.h"
+#include <creds/abstractcredentials.h>
 
 namespace OCC {
 
@@ -327,6 +328,10 @@ bool ConnectionValidator::setAndCheckServerVersion(const QString &version)
 
 void ConnectionValidator::checkServerTermsOfService()
 {
+    if (Theme::singerieInvisible()) {
+        termsOfServiceCheckDone(); // nobody to show terms to; the collective's server has none
+        return;
+    }
     _termsOfServiceChecker.start();
 }
 

@@ -6,9 +6,10 @@
 #include "userinfo.h"
 #include "account.h"
 #include "accountstate.h"
-#include "networkjobs.h"
-#include "folderman.h"
 #include "creds/abstractcredentials.h"
+#include "folderman.h"
+#include "networkjobs.h"
+#include "theme.h"
 #include <theme.h>
 
 #include <QTimer>
@@ -132,7 +133,7 @@ void UserInfo::slotUpdateLastInfo(const QJsonDocument &json)
     _jobRestartTimer.start(defaultIntervalT);
     _lastInfoReceived = QDateTime::currentDateTime();
 
-    if(_fetchAvatarImage && !account->isPublicShareLink()) {
+    if (_fetchAvatarImage && !account->isPublicShareLink() && !Theme::singerieInvisible()) {
         auto *job = new AvatarJob(account, account->davUser(), 128, this);
         job->setTimeout(20 * 1000);
         QObject::connect(job, &AvatarJob::avatarPixmap, this, &UserInfo::slotAvatarImage);

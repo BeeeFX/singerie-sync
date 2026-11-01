@@ -766,6 +766,11 @@ void Application::showMainDialogRemoteCommand()
         return;
     }
 
+    if (Theme::singerieInvisible()) {
+        qCInfo(lcApplication) << "Started again: nothing to show, Singerie shows the sync state";
+        return;
+    }
+
            // Show the main dialog only if there is at least one account configured
     if (!AccountManager::instance()->accounts().isEmpty()) {
         showMainDialog();
@@ -891,8 +896,8 @@ void Application::slotAccountStateRemoved(AccountState *accountState)
             _folderManager.data(), &FolderMan::slotServerVersionChanged);
     }
 
-    // if there is no more account, show the wizard.
-    if (_gui && AccountManager::instance()->accounts().isEmpty()) {
+    // if there is no more account, show the wizard (not in Singerie's client: Singerie provisions it).
+    if (_gui && AccountManager::instance()->accounts().isEmpty() && !Theme::singerieInvisible()) {
         // allow to add a new account if there is non any more. Always think
         // about single account theming!
         OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
@@ -947,8 +952,12 @@ void Application::slotCheckConnection()
             return;
         }
 
-        // let gui open the setup wizard
-        _gui->slotOpenSettingsDialog();
+        // let gui open the setup wizard (Singerie's client waits for Singerie's --provision instead)
+        if (Theme::singerieInvisible()) {
+            qCInfo(lcApplication) << "No account yet: waiting for Singerie to provision one";
+        } else {
+            _gui->slotOpenSettingsDialog();
+        }
 
         _checkConnectionTimer.stop(); // don't popup the wizard on interval;
     }
@@ -1207,6 +1216,11 @@ void Application::showHelp()
 
 void Application::showVersion()
 {
+    if (Theme::singerieInvisible()) {
+        // Read by Singerie (no window): on standard output.
+        std::cout << qUtf8Printable(Theme::instance()->versionSwitchOutput()) << std::flush;
+        return;
+    }
     displayHelpText(Theme::instance()->versionSwitchOutput());
 }
 

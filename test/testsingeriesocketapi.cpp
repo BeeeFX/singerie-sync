@@ -17,7 +17,9 @@
 #include "socketapi/socketapi_p.h"
 #include "syncengine.h"
 #include "syncenginetestutils.h"
+#include "systray.h"
 #include "testhelper.h"
+#include "theme.h"
 
 #include "common/syncjournalfilerecord.h"
 
@@ -209,6 +211,25 @@ private Q_SLOTS:
         QDir(bin->folder()).removeRecursively();
         QDir().rmdir(QFileInfo(bin->folder()).absolutePath());
         FolderMan::instance()->unloadAndDeleteAllFolders();
+    }
+
+    /*
+     * Invisible: the client's pop-ups go to Singerie as events; --version names the build.
+     */
+    void testInvisible()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.path());
+        QVERIFY(Theme::singerieInvisible());
+        QVERIFY(Theme::instance()->versionSwitchOutput().contains(QStringLiteral("Singerie Sync build ")));
+        RecordingListener subscriber;
+        ask(QStringLiteral("SINGERIE_SUBSCRIBE"), {}, subscriber);
+        Systray::instance()->showMessage(QStringLiteral("Sync error"), QStringLiteral("Something to say"));
+        const auto notification = subscriber.events(QStringLiteral("notification")).value(0);
+        QCOMPARE(notification.value(QStringLiteral("title")).toString(), QStringLiteral("Sync error"));
+        QCOMPARE(notification.value(QStringLiteral("message")).toString(), QStringLiteral("Something to say"));
+        QVERIFY(!Systray::instance()->isVisible());
     }
 
     /*

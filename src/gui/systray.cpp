@@ -4,22 +4,24 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include "systray.h"
+#include "accessmanager.h"
 #include "accountmanager.h"
 #include "accountstate.h"
 #include "activity/syncstatussummary.h"
-#include "systray.h"
-#include "theme.h"
-#include "config.h"
+#include "callstatechecker.h"
 #include "common/utility.h"
-#include "tray/svgimageprovider.h"
+#include "config.h"
+#include "configfile.h"
+#include "folderman.h"
+#include "guiutility.h"
 #include "search/unifiedsearchresultslistmodel.h"
+#include "socketapi/socketapi.h"
+#include "theme.h"
+#include "tray/svgimageprovider.h"
+#include "tray/trayimageprovider.h"
 #include "tray/usermodel.h"
 #include "wheelhandler.h"
-#include "tray/trayimageprovider.h"
-#include "configfile.h"
-#include "accessmanager.h"
-#include "callstatechecker.h"
-#include "guiutility.h"
 
 #ifdef Q_OS_MACOS
 #include "foregroundbackground_interface.h"
@@ -1079,6 +1081,12 @@ void Systray::setIsOpen(const bool isOpen)
 
 void Systray::showMessage(const QString &title, const QString &message, MessageIcon icon)
 {
+    if (Theme::singerieInvisible()) {
+        // No pop-up of its own: Singerie decides what the member sees (its quiet hours, one place to look).
+        FolderMan::instance()->socketApi()->singerieBroadcast(
+            {{QStringLiteral("type"), QStringLiteral("notification")}, {QStringLiteral("title"), title}, {QStringLiteral("message"), message}});
+        return;
+    }
 #ifdef USE_FDO_NOTIFICATIONS
     if (QDBusInterface(NOTIFICATIONS_SERVICE, NOTIFICATIONS_PATH, NOTIFICATIONS_IFACE).isValid()) {
         const QVariantMap hints = {{QStringLiteral("desktop-entry"), LINUX_APPLICATION_ID}};
@@ -1101,6 +1109,9 @@ void Systray::showMessage(const QString &title, const QString &message, MessageI
 
 void Systray::showUpdateMessage(const QString &title, const QString &message, const QUrl &webUrl)
 {
+    if (Theme::singerieInvisible()) {
+        return; // Singerie installs and updates the client
+    }
 #if defined(Q_OS_MACOS) && __MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_14 && defined(BUILD_OWNCLOUD_OSX_BUNDLE)
     sendOsXUpdateNotification(title, message, webUrl);
 #else // TODO: Implement custom notifications (i.e. actionable) for other OSes

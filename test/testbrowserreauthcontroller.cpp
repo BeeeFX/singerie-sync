@@ -140,6 +140,8 @@ class TestBrowserReAuthController : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
+        // These tests are about the sign-in window, which Singerie's invisible client doesn't show by default.
+        qputenv("SINGERIE_SHOW_UI", "1");
         OCC::Logger::instance()->setLogFlush(true);
         OCC::Logger::instance()->setLogDebug(true);
 

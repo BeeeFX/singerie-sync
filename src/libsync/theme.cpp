@@ -936,6 +936,12 @@ QString Theme::quotaBaseFolder() const
     return QLatin1String("/");
 }
 
+bool Theme::singerieInvisible()
+{
+    static const auto invisible = qEnvironmentVariableIntValue("SINGERIE_SHOW_UI") == 0;
+    return invisible;
+}
+
 QString Theme::versionSwitchOutput() const
 {
     QString helpText;
@@ -943,6 +949,7 @@ QString Theme::versionSwitchOutput() const
     stream << appName()
            << QLatin1String(" version ")
            << version() << Qt::endl;
+    stream << "Singerie Sync build " << SINGERIE_SYNC_VERSION << Qt::endl;
 #ifdef GIT_SHA1
     stream << "Git revision " << GIT_SHA1 << Qt::endl;
 #endif

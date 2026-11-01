@@ -76,6 +76,13 @@ public:
     /* returns a singleton instance. */
     static Theme *instance();
 
+    /**
+     * Singerie's client is invisible: no tray icon, no pop-ups (they go to Singerie as socket events), no wizard, no
+     * sign-in window, no user-status/avatar/terms-of-service polls; Singerie shows the sync state and asks the
+     * member. SINGERIE_SHOW_UI=1 in the environment shows the client's own interface again (developers only).
+     */
+    static bool singerieInvisible();
+
     ~Theme() override;
 
     /**

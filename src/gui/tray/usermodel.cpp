@@ -1142,6 +1142,9 @@ void User::slotRefreshActivities()
 
 void User::slotRefreshUserStatus()
 {
+    if (Theme::singerieInvisible()) {
+        return;
+    }
     if (_account.data() && _account.data()->isConnected()) {
         _account->account()->userStatusConnector()->fetchUserStatus();
     }
@@ -1149,6 +1152,9 @@ void User::slotRefreshUserStatus()
 
 void User::slotRefreshNotifications()
 {
+    if (Theme::singerieInvisible()) {
+        return;
+    }
     static auto debugCallNotificationShown = false;
     if (!debugCallNotificationShown) {
         debugCallNotificationShown = showDebugCallNotification(_account);
