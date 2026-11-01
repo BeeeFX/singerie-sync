@@ -2209,6 +2209,8 @@ private Q_SLOTS:
         remote.insert(u"work/mine/b.txt"_s, 64);
         remote.mkdir(u"work/mixed"_s);
         remote.insert(u"work/mixed/bobs.txt"_s, 64);
+        remote.insert(u"work/notes.txt"_s, 64);
+        remote.find(u"work/notes.txt"_s)->permissions = RemotePermissions::fromServerString(u"GWM"_s);
         remote.find(u"published"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
         remote.find(u"published/frame.exr"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
         remote.find(u"work"_s)->permissions = RemotePermissions::fromServerString(u"RMGCK"_s);
@@ -2230,11 +2232,18 @@ private Q_SLOTS:
         // has listed it on this PC, as Explorer does before deleting a folder. List them all from another process.
         QCOMPARE(runElsewhere(u"Get-ChildItem -LiteralPath %1 -Recurse -Force | Out-Null"_s.arg(psQuoted(fakeFolder.localPath()))), u"ok"_s);
 
-        // Refused by this client (ERROR_CLOUD_FILE_ACCESS_DENIED): the server allows none of these.
-        QCOMPARE(runElsewhere(u"[IO.File]::Delete(%1)"_s.arg(local(u"published/frame.exr"_s))), cloudFileAccessDenied);
-        QCOMPARE(runElsewhere(u"Remove-Item -LiteralPath %1 -Force"_s.arg(local(u"work/bob.txt"_s))), cloudFileAccessDenied);
-        QCOMPARE(runElsewhere(u"Rename-Item -LiteralPath %1 -NewName bob2.txt"_s.arg(local(u"work/bob.txt"_s))), cloudFileAccessDenied);
-        QCOMPARE(runElsewhere(u"[IO.File]::Move(%1, %2)"_s.arg(local(u"work/bob.txt"_s), local(u"work/mine/bob.txt"_s))), cloudFileAccessDenied);
+        // Refused by this client itself (ERROR_CLOUD_FILE_ACCESS_DENIED): a file the user may change but not delete,
+        // rename or move has no read-only mark, so only the provider's answer stops these.
+        QCOMPARE(runElsewhere(u"[IO.File]::Delete(%1)"_s.arg(local(u"work/notes.txt"_s))), cloudFileAccessDenied);
+        QCOMPARE(runElsewhere(u"Remove-Item -LiteralPath %1 -Force"_s.arg(local(u"work/notes.txt"_s))), cloudFileAccessDenied);
+        QCOMPARE(runElsewhere(u"Rename-Item -LiteralPath %1 -NewName notes2.txt"_s.arg(local(u"work/notes.txt"_s))), cloudFileAccessDenied);
+        QCOMPARE(runElsewhere(u"[IO.File]::Move(%1, %2)"_s.arg(local(u"work/notes.txt"_s), local(u"work/mine/notes.txt"_s))), cloudFileAccessDenied);
+        QVERIFY(exists(u"work/notes.txt"_s));
+        // Read-only files: refused too (by their read-only mark first, or by the provider).
+        QVERIFY(refused(runElsewhere(u"[IO.File]::Delete(%1)"_s.arg(local(u"published/frame.exr"_s)))));
+        QVERIFY(refused(runElsewhere(u"Remove-Item -LiteralPath %1 -Force"_s.arg(local(u"work/bob.txt"_s)))));
+        QVERIFY(refused(runElsewhere(u"Rename-Item -LiteralPath %1 -NewName bob2.txt"_s.arg(local(u"work/bob.txt"_s)))));
+        QVERIFY(refused(runElsewhere(u"[IO.File]::Move(%1, %2)"_s.arg(local(u"work/bob.txt"_s), local(u"work/mine/bob.txt"_s)))));
         // Folders, the Recycle Bin, a move out of the sync folder: refused (the error may be the
         // shell's or .NET's wording of the same refusal).
         QVERIFY(refused(runElsewhere(u"[IO.Directory]::Move(%1, %2)"_s.arg(local(u"work/mixed"_s), psQuoted(fakeFolder.localPath() + u"../mixed-out"_s)))));
@@ -2265,6 +2274,29 @@ private Q_SLOTS:
         QVERIFY(fakeFolder.currentRemoteState().find(u"work/bob.txt"_s));
         QVERIFY(fakeFolder.currentRemoteState().find(u"work/mixed/bobs.txt"_s));
         QVERIFY(fakeFolder.currentRemoteState().find(u"published/frame.exr"_s));
+    }
+    void testOnDemandPlaceholdersKeepReadOnly()
+    {
+        // A folder filled on demand (listed from another process, as Explorer does) gets the same read-only marks as
+        // what the sync places itself: the server's read-only file can't be written over, the user's own can.
+        FakeFolder fakeFolder{FileInfo{}};
+        auto vfs = setupVfs(fakeFolder);
+        auto &remote = fakeFolder.remoteModifier();
+        remote.mkdir(u"published"_s);
+        remote.insert(u"published/frame.exr"_s, 64);
+        remote.mkdir(u"mine"_s);
+        remote.insert(u"mine/a.txt"_s, 64);
+        remote.find(u"published"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
+        remote.find(u"published/frame.exr"_s)->permissions = RemotePermissions::fromServerString(u"MG"_s);
+        QVERIFY(fakeFolder.syncOnce());
+
+        const auto local = [&fakeFolder](const QString &path) {
+            return psQuoted(fakeFolder.localPath() + path);
+        };
+        QCOMPARE(runElsewhere(u"Get-ChildItem -LiteralPath %1 -Recurse -Force | Out-Null"_s.arg(psQuoted(fakeFolder.localPath()))), u"ok"_s);
+        QVERIFY(runElsewhere(u"[IO.File]::WriteAllText(%1, 'mine')"_s.arg(local(u"published/frame.exr"_s))).startsWith(u"err "_s));
+        QVERIFY(runElsewhere(u"New-Item -ItemType File -Path %1 | Out-Null"_s.arg(local(u"published/new.txt"_s))).startsWith(u"err "_s));
+        QCOMPARE(runElsewhere(u"[IO.File]::WriteAllText(%1, 'mine')"_s.arg(local(u"mine/a.txt"_s))), u"ok"_s);
     }
 };
 
