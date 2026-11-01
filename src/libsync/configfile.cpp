@@ -1360,6 +1360,12 @@ void ConfigFile::setupDefaultExcludeFilePaths(ExcludedFiles &excludedFiles)
         return;
     }
 
+    // The built-in list always applies, the user's list adds to it (Singerie writes its patterns there, from
+    // singerie-core, and they must never switch the client's own patterns off). Upstream used the user's list alone.
+    if (QFile::exists(systemList)) {
+        qCInfo(lcConfigFile) << "Adding system ignore list to csync:" << systemList;
+        excludedFiles.addExcludeFilePath(systemList);
+    }
     qCInfo(lcConfigFile) << "Adding user defined ignore list to csync:" << userList;
     excludedFiles.addExcludeFilePath(userList);
 }
