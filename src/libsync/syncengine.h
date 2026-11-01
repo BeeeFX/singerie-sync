@@ -122,6 +122,10 @@ public:
 
     static void switchToVirtualFiles(const QString &localPath, SyncJournalDb &journal, Vfs &vfs);
 
+    /// Singerie (SYNC-6): which copy of a conflict kept the name is kept in the journal's key-value store beside its
+    /// conflict record (`what`: "local" 1/0, "kept" and "copy" modification times), until the record goes.
+    static QString singerieConflictKey(const char *what, const QString &copy);
+
     [[nodiscard]] QSharedPointer<OwncloudPropagator> getPropagator() const { return _propagator; } // for the test
     [[nodiscard]] const SyncEngine::SingleItemDiscoveryOptions &singleItemDiscoveryOptions() const;
 

@@ -280,6 +280,9 @@ void SyncEngine::conflictRecordMaintenance()
         auto fsPath = _propagator->fullLocalPath(QString::fromUtf8(path));
         if (!FileSystem::fileExists(fsPath)) {
             _journal->deleteConflictRecord(path);
+            for (const auto what : {"local", "kept", "copy"}) {
+                _journal->keyValueStoreDelete(singerieConflictKey(what, QString::fromUtf8(path)));
+            }
         }
     }
 
@@ -1114,6 +1117,14 @@ void SyncEngine::finishSync()
     connect(_propagator.data(), &OwncloudPropagator::seenLockedFile, this, &SyncEngine::seenLockedFile);
     connect(_propagator.data(), &OwncloudPropagator::touchedFile, this, &SyncEngine::slotAddTouchedFile);
     connect(_propagator.data(), &OwncloudPropagator::conflictResolved, this, &SyncEngine::conflictResolved);
+    connect(_propagator.data(),
+            &OwncloudPropagator::conflictResolved,
+            this,
+            [this](const QString &, const QString &copy, bool keptFromLocal, qint64 keptMtime, qint64 copyMtime) {
+                _journal->keyValueStoreSet(singerieConflictKey("local", copy), keptFromLocal ? 1 : 0);
+                _journal->keyValueStoreSet(singerieConflictKey("kept", copy), keptMtime);
+                _journal->keyValueStoreSet(singerieConflictKey("copy", copy), copyMtime);
+            });
     connect(_propagator.data(), &OwncloudPropagator::insufficientLocalStorage, this, &SyncEngine::slotInsufficientLocalStorage);
     connect(_propagator.data(), &OwncloudPropagator::insufficientRemoteStorage, this, &SyncEngine::slotInsufficientRemoteStorage);
     connect(_propagator.data(), &OwncloudPropagator::newItem, this, &SyncEngine::slotNewItem);
@@ -1301,6 +1312,11 @@ bool SyncEngine::handleMassDeletion()
         return true;
     }
     return false;
+}
+
+QString SyncEngine::singerieConflictKey(const char *what, const QString &copy)
+{
+    return QStringLiteral("singerie_conflict_") + QString::fromLatin1(what) + QLatin1Char(':') + copy;
 }
 
 int SyncEngine::journalFileCount(const QString &path)

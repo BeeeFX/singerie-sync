@@ -15,6 +15,8 @@
 #include "config.h"
 
 #include <QLocalServer>
+#include <QPointer>
+#include <QSet>
 
 #include <QUrl>
 class QLocalSocket;
@@ -126,6 +128,20 @@ private:
 
     Q_INVOKABLE void command_VERSION(const QString &argument, OCC::SocketListener *listener);
 
+    // Singerie's commands: each answers one line NAME:<json> (docs: the fork's README, Singerie's
+    // docs/dev/nextcloud-client.md).
+    Q_INVOKABLE void command_SINGERIE_HELLO(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_STATUS(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_SUBSCRIBE(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_SCAN(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_RELEASE_HOLD(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_LOCAL_WIPE_CONFIRM(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_LOCAL_WIPE_RESTORE(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_BIN_SUMMARY(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_BIN_LIST(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_BIN_RESTORE(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_BIN_EMPTY(const QString &argument, OCC::SocketListener *listener);
+
     Q_INVOKABLE void command_SHARE_MENU_TITLE(const QString &argument, OCC::SocketListener *listener);
 
     // The context menu actions
@@ -202,6 +218,26 @@ private:
 
     QSet<QString> _registeredAliases;
     QMap<QIODevice *, QSharedPointer<SocketListener>> _listeners;
+
+    // Singerie's events.
+public:
+    /// SINGERIE_STATUS's answer (without the conflicts waiting to be read).
+    [[nodiscard]] QJsonObject singerieStatus() const;
+    /// Pushes SINGERIE_EVENT:<json> to every listener that sent SINGERIE_SUBSCRIBE.
+    void singerieBroadcast(const QJsonObject &event);
+
+private Q_SLOTS:
+    void slotSingerieEvent(const QJsonObject &event);
+    void slotSingerieStatusMaybeChanged();
+
+private:
+    void singerieWatchFolders();
+    void singerieAnswer(OCC::SocketListener *listener, const QString &name, const QJsonObject &answer) const;
+    Folder *singerieFolder(const QString &path) const;
+    QList<QPointer<QIODevice>> _singerieSubscribers;
+    QSet<SocketListener *> _singerieSubscribedListeners; ///< listeners without a socket (tests)
+    static QString singerieAccountWord(const AccountState &state);
+    QByteArray _singerieLastStatus;
     QLocalServer _localServer;
 };
 }

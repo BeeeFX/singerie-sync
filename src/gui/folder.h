@@ -18,6 +18,8 @@
 #include <QStringList>
 #include <QUuid>
 #include <QSet>
+#include <QElapsedTimer>
+#include <QJsonObject>
 
 #include <set>
 #include <chrono>
@@ -248,6 +250,75 @@ public:
     {
         return _bin;
     }
+
+    // Singerie's socket commands (SINGERIE_*): what this sync folder holds back and what it last did.
+    /// The folders held because the server stopped showing them (SYNC-1): the whole sync folder, or one folder near its
+    /// top (a project), each as its absolute path (native separators) with when it started, in Unix seconds.
+    [[nodiscard]] QList<QPair<QString, qint64>> singerieHeldFolders() const;
+    /// How long an answer (a released hold, a local wipe's answer) waits for a sync to apply it (SYNC-2), in seconds.
+    static constexpr qint64 singerieAnswerLifetime = 600;
+    /// Whether an answer given at `answeredAt` about the hold or wipe that started at `answeredSince` still applies
+    /// `now`, while the current one started at `currentSince` (0: none any more).
+    static bool singerieAnswerStillGood(qint64 answeredAt, qint64 answeredSince, qint64 currentSince, qint64 now);
+    /// The conflicts whose copy is still on this PC, from the journal (SYNC-6: they outlive a restart and every
+    /// SINGERIE_STATUS lists them until the copy is deleted or renamed), at most 100.
+    [[nodiscard]] QJsonArray singerieConflicts() const;
+    /// A held local wipe: how many of the member's own files, since when; 0: none.
+    [[nodiscard]] int singerieLocalWipeCount() const
+    {
+        return _singerieWipeCount;
+    }
+    [[nodiscard]] qint64 singerieLocalWipeSince() const
+    {
+        return _singerieWipeSince;
+    }
+    /// The last sync that finished well, in Unix seconds; 0: none yet.
+    [[nodiscard]] qint64 singerieLastSync() const
+    {
+        return _singerieLastSync;
+    }
+    /// Files still to upload and download in the running sync.
+    [[nodiscard]] int singerieUp() const
+    {
+        return _singerieUp;
+    }
+    [[nodiscard]] int singerieDown() const
+    {
+        return _singerieDown;
+    }
+    /// The last finished sync's errors: (absolute path or the folder, message).
+    [[nodiscard]] QList<QPair<QString, QString>> singerieErrors() const
+    {
+        return _singerieErrors;
+    }
+
+    /// What moves now, within each file (Singerie's `progress`): empty when nothing moves.
+    [[nodiscard]] QJsonObject singerieProgress() const
+    {
+        return _singerieProgress;
+    }
+
+    /// The `progress` body for `pi`: the sync's bytes done and to do, its speed, and each file moving now (its path
+    /// under `root`, direction, bytes done, size, speed), at most `maxFiles` of them, the biggest first.
+    static QJsonObject singerieProgressOf(const ProgressInfo &pi, const QString &root, int maxFiles = 20);
+
+    /// The names this PC can't hold or the server refuses, found by the last sync (Singerie's `skipped`).
+    [[nodiscard]] QList<QJsonObject> singerieSkipped() const
+    {
+        return _singerieSkipped;
+    }
+
+    /// Singerie's `skipped_name` body for an item the sync left out for its name (A30): its path under `root`, why
+    /// (`reserved`, `trailing_space`, `leading_space`, `trailing_dot`, `invalid_char`, `too_long`, `server`, `invalid`),
+    /// the client's message, and `renamed_to` when the client renamed the file on this PC (a trailing space). Empty for
+    /// any other item.
+    static QJsonObject singerieSkippedName(const QString &root, const SyncFileItem &item);
+    /// The next sync follows the server where `folder` (the sync folder, or a held folder inside it: an absolute path)
+    /// is held. False: it isn't held. The answer expires after singerieAnswerLifetime.
+    bool singerieReleaseHold(const QString &folder);
+    /// The answer to a held local wipe, for the next sync: the number of files, or -1 when none is held. It applies
+    /// to that wipe only, for singerieAnswerLifetime.
+    int singerieAnswerLocalWipe(bool deleteEverywhere);
     [[nodiscard]] SyncEngine &syncEngine() const { return *_engine; }
     [[nodiscard]] Vfs &vfs() const { return *_vfs; }
 
@@ -383,6 +454,9 @@ Q_SIGNALS:
     void newBigFolderDiscovered(const QString &); // A new folder bigger than the threshold was discovered
     void syncPausedChanged(OCC::Folder *, bool paused);
     void canSyncChanged();
+
+    /// Something Singerie's socket API pushes (SINGERIE_EVENT): held, unheld, local_wipe_held, conflict, bin_changed.
+    void singerieEvent(const QJsonObject &event);
 
     /**
      * Fires for each change inside this folder that wasn't caused
@@ -539,7 +613,7 @@ private:
 
     bool checkLocalPath();
 
-    SyncOptions initializeSyncOptions() const;
+    SyncOptions initializeSyncOptions(); // not const: drops the Singerie answers that no longer apply (SYNC-2)
 
     enum LogStatus {
         LogStatusRemove,
@@ -600,6 +674,38 @@ private:
 
     /// Singerie's local bin of this sync folder (SingerieBin), beside it on the same drive.
     QSharedPointer<SingerieBin> _bin;
+
+    void singerieConnectEngine();
+    /// Held folders, relative to the sync folder ("": the whole of it) → since (Unix seconds).
+    QMap<QString, qint64> _singerieHeld;
+    /// The folders held by the running sync.
+    QSet<QString> _singerieHeldNow;
+    /// Released holds waiting for a sync: folder → (the hold's since, when released).
+    QMap<QString, QPair<qint64, qint64>> _singerieReleases;
+    /// The releases (folder → when released) and the wipe answer (when answered) the running sync was given.
+    QMap<QString, qint64> _singerieReleasesInSync;
+    qint64 _singerieWipeAnsweredAtInSync = 0;
+    void singerieHoldStarted(const QString &relative);
+    void singerieHoldEnded(const QString &relative);
+    int _singerieWipeCount = 0;
+    qint64 _singerieWipeSince = 0;
+    bool _singerieWipeThisSync = false;
+    SyncOptions::LocalWipeAnswer _singerieWipeAnswer = SyncOptions::LocalWipeAnswer::None;
+    qint64 _singerieWipeAnsweredAt = 0;
+    qint64 _singerieWipeAnsweredSince = 0;
+    int _singerieWipeAnsweredCount = 0;
+    qint64 _singerieLastSync = 0;
+    int _singerieUp = 0;
+    int _singerieDown = 0;
+    QList<QPair<QString, QString>> _singerieErrors;
+    QJsonObject _singerieProgress;
+    QList<QJsonObject> _singerieSkipped;
+    QList<QJsonObject> _singerieSkippedNow;
+    QSet<QString> _singerieSkippedTold; ///< told once per path while the client runs
+    QElapsedTimer _singerieProgressSent;
+    QList<QPair<QString, QString>> _singerieErrorsNow;
+    qint64 _singerieBinBytes = -1;
+    int _singerieBinCount = -1;
 
     QScopedPointer<SyncRunFileLog> _fileLog;
 

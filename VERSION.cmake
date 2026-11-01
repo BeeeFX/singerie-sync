@@ -33,6 +33,20 @@ set(NEXTCLOUD_SERVER_VERSION_MOUNT_ROOT_PROPERTY_SUPPORTED_PATCH 3)
 # ------------------------------------
 # Define default suffixes if not set
 # ------------------------------------
+# Singerie's build of the client: <upstream version>+<build date>.sng<n> (SINGERIE_BUILD_NUMBER, default 1; the
+# date the build was configured, or SINGERIE_BUILD_DATE as YYYY.MM.DD), read by Singerie (SINGERIE_HELLO, --version).
+if(DEFINED ENV{SINGERIE_BUILD_NUMBER})
+    set(SINGERIE_BUILD_NUMBER "$ENV{SINGERIE_BUILD_NUMBER}")
+elseif(NOT DEFINED SINGERIE_BUILD_NUMBER)
+    set(SINGERIE_BUILD_NUMBER 1)
+endif()
+if(DEFINED ENV{SINGERIE_BUILD_DATE})
+    set(SINGERIE_BUILD_DATE "$ENV{SINGERIE_BUILD_DATE}")
+else()
+    string(TIMESTAMP SINGERIE_BUILD_DATE "%Y.%m.%d" UTC)
+endif()
+set(SINGERIE_SYNC_VERSION "${MIRALL_VERSION_MAJOR}.${MIRALL_VERSION_MINOR}.${MIRALL_VERSION_PATCH}+${SINGERIE_BUILD_DATE}.sng${SINGERIE_BUILD_NUMBER}")
+
 if(NOT DEFINED MIRALL_VERSION_SUFFIX)
     set(MIRALL_VERSION_SUFFIX "daily")  # e.g. beta1, rc1, etc.
 endif()

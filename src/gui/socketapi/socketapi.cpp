@@ -34,6 +34,7 @@
 #include "guiutility.h"
 #ifndef OWNCLOUD_TEST
 #include "sharemanager.h"
+#include "singeriebin.h"
 #endif
 
 #include <array>
@@ -50,7 +51,7 @@
 #include <QStringBuilder>
 #include <QMessageBox>
 #include <QInputDialog>
-
+#include <algorithm>
 
 #include <QAction>
 #include <QJsonArray>
@@ -293,6 +294,11 @@ SocketApi::SocketApi(QObject *parent)
         }
     }
 
+#ifdef Q_OS_WIN
+    // Only this Windows account may open the pipe (SYNC-12): Windows' default lets every account on the PC connect
+    // and read the sync folder's path and the files' states go by.
+    _localServer.setSocketOptions(QLocalServer::UserAccessOption);
+#endif
     const bool result = _localServer.listen(socketPath);
     qCDebug(lcSocketApi) << "Full server name:" << _localServer.fullServerName();
 
@@ -357,6 +363,7 @@ void SocketApi::onLostConnection()
     auto socket = qobject_cast<QIODevice *>(sender());
     ASSERT(socket);
     _listeners.remove(socket);
+    _singerieSubscribers.removeAll(socket);
 }
 
 void SocketApi::slotSocketDestroyed(QObject *obj)
@@ -444,6 +451,8 @@ void SocketApi::slotReadSocket()
 
 void SocketApi::slotRegisterPath(const QString &alias)
 {
+    singerieWatchFolders();
+
     // Make sure not to register twice to each connected client
     if (_registeredAliases.contains(alias)) {
         return;
@@ -759,6 +768,498 @@ void SocketApi::command_ENCRYPT(const QString &localFile, SocketListener *listen
     Q_UNUSED(listener);
 
     processEncryptRequest(localFile);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Singerie's commands. One line NAME:<json> per answer, so the managing application reads until that prefix.
+
+namespace
+{
+
+QString singeriePath(const QString &path)
+{
+    return QDir::toNativeSeparators(QDir::cleanPath(path));
+}
+
+QString singerieBinId(const SingerieBin &bin, const QString &itemId)
+{
+    return QFileInfo(bin.folder()).fileName() + QLatin1Char(':') + itemId;
+}
+
+} // namespace
+
+void SocketApi::singerieAnswer(SocketListener *listener, const QString &name, const QJsonObject &answer) const
+{
+    listener->sendMessage(name + QLatin1Char(':') + QString::fromUtf8(QJsonDocument(answer).toJson(QJsonDocument::Compact)));
+}
+
+Folder *SocketApi::singerieFolder(const QString &path) const
+{
+    const auto wanted = QDir::cleanPath(QDir::fromNativeSeparators(path.trimmed()));
+    if (wanted.isEmpty()) {
+        return nullptr;
+    }
+    const auto sensitivity = Utility::fsCasePreserving() ? Qt::CaseInsensitive : Qt::CaseSensitive;
+    for (const auto folder : FolderMan::instance()->map()) {
+        const auto root = QDir::cleanPath(folder->path());
+        if (wanted.compare(root, sensitivity) == 0 || wanted.startsWith(root + QLatin1Char('/'), sensitivity)) {
+            return folder;
+        }
+    }
+    return nullptr;
+}
+
+void SocketApi::singerieWatchFolders()
+{
+    for (const auto folder : FolderMan::instance()->map()) {
+        connect(folder, &Folder::singerieEvent, this, &SocketApi::slotSingerieEvent, Qt::UniqueConnection);
+        connect(folder, &Folder::syncStateChange, this, &SocketApi::slotSingerieStatusMaybeChanged, Qt::UniqueConnection);
+    }
+}
+
+QJsonObject SocketApi::singerieStatus() const
+{
+    QJsonArray held;
+    QJsonArray wipes;
+    QJsonArray errors;
+    QJsonObject progress;
+    QJsonArray skipped;
+    qint64 lastSync = 0;
+    auto up = 0;
+    auto down = 0;
+    auto syncing = false;
+    auto offline = false;
+    auto paused = false;
+    auto allPaused = true;
+    QString account = QStringLiteral("none");
+    const auto folders = FolderMan::instance()->map();
+    for (const auto folder : folders) {
+        const auto path = singeriePath(folder->path());
+        for (const auto &[heldPath, since] : folder->singerieHeldFolders()) {
+            held.append(QJsonObject{{QStringLiteral("folder"), heldPath},
+                                    {QStringLiteral("since"), since},
+                                    {QStringLiteral("direction"), QStringLiteral("server")}});
+        }
+        if (const auto state = folder->accountState()) {
+            // The first account with a problem names it.
+            if (account == QStringLiteral("none") || account == QStringLiteral("ok")) {
+                account = singerieAccountWord(*state);
+            }
+        }
+        if (folder->singerieLocalWipeCount() != 0) {
+            wipes.append(QJsonObject{{QStringLiteral("folder"), path},
+                                     {QStringLiteral("count"), folder->singerieLocalWipeCount()},
+                                     {QStringLiteral("since"), folder->singerieLocalWipeSince()}});
+        }
+        for (const auto &[errorPath, message] : folder->singerieErrors()) {
+            errors.append(QJsonObject{{QStringLiteral("path"), errorPath}, {QStringLiteral("message"), message}});
+        }
+        for (const auto &name : folder->singerieSkipped()) {
+            if (skipped.size() < 200) {
+                skipped.append(name);
+            }
+        }
+        if (const auto moving = folder->singerieProgress(); !moving.isEmpty() && progress.isEmpty()) {
+            progress = moving;
+        }
+        lastSync = std::max(lastSync, folder->singerieLastSync());
+        up += folder->singerieUp();
+        down += folder->singerieDown();
+        syncing = syncing || folder->isBusy();
+        offline = offline || !folder->accountState() || !folder->accountState()->isConnected();
+        allPaused = allPaused && folder->syncPaused();
+    }
+    paused = paused || (!folders.isEmpty() && allPaused);
+    QString state = QStringLiteral("idle");
+    if (!held.isEmpty() || !wipes.isEmpty()) {
+        state = QStringLiteral("held");
+    } else if (paused) {
+        // Singerie's Pause is said whatever else (the member's choice, read live).
+        state = QStringLiteral("paused");
+    } else if (folders.isEmpty()) {
+        // No account or no sync folder set up (SYNC-5): not "idle", which reads as "everything is on the server".
+        state = QStringLiteral("not_set_up");
+    } else if (account == QStringLiteral("signed_out") || account == QStringLiteral("asking_credentials")) {
+        state = QStringLiteral("signed_out");
+    } else if (account == QStringLiteral("certificate")) {
+        state = QStringLiteral("certificate");
+    } else if (offline) {
+        state = QStringLiteral("offline");
+    } else if (syncing) {
+        state = QStringLiteral("syncing");
+    } else if (!errors.isEmpty()) {
+        state = QStringLiteral("error");
+    }
+    return {
+        {QStringLiteral("state"), state},
+        {QStringLiteral("last_sync"), lastSync > 0 ? QJsonValue(lastSync) : QJsonValue()},
+        {QStringLiteral("up"), up},
+        {QStringLiteral("down"), down},
+        {QStringLiteral("errors"), errors},
+        {QStringLiteral("held"), held},
+        {QStringLiteral("local_wipes"), wipes},
+        {QStringLiteral("progress"), progress.isEmpty() ? QJsonValue() : QJsonValue(progress)},
+        {QStringLiteral("skipped"), skipped},
+        {QStringLiteral("account"), account},
+        {QStringLiteral("folders"), folders.size()},
+    };
+}
+
+QString SocketApi::singerieAccountWord(const AccountState &state)
+{
+    // A certificate refused by the invisible client (SYNC-8) until the account connects again.
+    if (state.state() != AccountState::Connected && state.account()->property("singerieCertificateRefused").toBool()) {
+        return QStringLiteral("certificate");
+    }
+    switch (state.state()) {
+    case AccountState::Connected:
+        return QStringLiteral("ok");
+    case AccountState::SignedOut:
+        return QStringLiteral("signed_out");
+    case AccountState::AskingCredentials:
+        return QStringLiteral("asking_credentials");
+    case AccountState::MaintenanceMode:
+    case AccountState::ServiceUnavailable:
+        return QStringLiteral("maintenance");
+    case AccountState::Disconnected:
+    case AccountState::NetworkError:
+    case AccountState::RedirectDetected:
+        return QStringLiteral("network");
+    case AccountState::ConfigurationError:
+    case AccountState::NeedToSignTermsOfService:
+        return QStringLiteral("error");
+    }
+    return QStringLiteral("error");
+}
+
+void SocketApi::singerieBroadcast(const QJsonObject &event)
+{
+    const auto line = QStringLiteral("SINGERIE_EVENT:") + QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact));
+    _singerieSubscribers.removeAll(nullptr);
+    // A subscriber that stops reading is let go before its waiting lines grow past 1 MB (SYNC-17).
+    _singerieSubscribers.removeIf([](const QPointer<QIODevice> &socket) {
+        if (socket->bytesToWrite() > 1024 * 1024) {
+            qCWarning(lcSocketApi) << "A Singerie subscriber stopped reading: no more events sent to it";
+            return true;
+        }
+        return false;
+    });
+    for (const auto &socket : std::as_const(_singerieSubscribers)) {
+        if (const auto listener = _listeners.value(socket.data())) {
+            listener->sendMessage(line);
+        }
+    }
+    for (const auto listener : std::as_const(_singerieSubscribedListeners)) {
+        listener->sendMessage(line);
+    }
+}
+
+void SocketApi::slotSingerieEvent(const QJsonObject &event)
+{
+    singerieBroadcast(event);
+    slotSingerieStatusMaybeChanged();
+}
+
+void SocketApi::slotSingerieStatusMaybeChanged()
+{
+    auto status = singerieStatus();
+    // Progress has its own event (about once a second); a status event is for a change of state.
+    status.remove(QStringLiteral("progress"));
+    const auto bytes = QJsonDocument(status).toJson(QJsonDocument::Compact);
+    if (bytes == _singerieLastStatus) {
+        return;
+    }
+    _singerieLastStatus = bytes;
+    status.insert(QStringLiteral("type"), QStringLiteral("status"));
+    singerieBroadcast(status);
+}
+
+void SocketApi::command_SINGERIE_HELLO(const QString &, SocketListener *listener)
+{
+    singerieWatchFolders();
+    singerieAnswer(listener,
+                   QStringLiteral("SINGERIE_HELLO"),
+                   {
+                       // 2 (12 November 2026): holds per folder, answers that expire, `account`, conflicts kept in the
+                       // journal, `member_reads` (the features below).
+                       {QStringLiteral("protocol"), 2},
+                       {QStringLiteral("features"),
+                        QJsonArray{QStringLiteral("folder_holds"),
+                                   QStringLiteral("answers_expire"),
+                                   QStringLiteral("account"),
+                                   QStringLiteral("conflicts_kept"),
+                                   QStringLiteral("member_reads"),
+                                   QStringLiteral("crash_dumps")}},
+                       {QStringLiteral("version"), QStringLiteral(SINGERIE_SYNC_VERSION)},
+                       {QStringLiteral("bin"), true},
+                       {QStringLiteral("adopt"), false},
+                       {QStringLiteral("events"),
+                        QJsonArray{QStringLiteral("status"),
+                                   QStringLiteral("held"),
+                                   QStringLiteral("unheld"),
+                                   QStringLiteral("local_wipe_held"),
+                                   QStringLiteral("conflict"),
+                                   QStringLiteral("bin_changed"),
+                                   QStringLiteral("credentials_failed"),
+                                   QStringLiteral("progress"),
+                                   QStringLiteral("skipped_name")}},
+                   });
+}
+
+void SocketApi::command_SINGERIE_STATUS(const QString &, SocketListener *listener)
+{
+    singerieWatchFolders();
+    auto status = singerieStatus();
+    // Every conflict whose copy is still on this PC, from the journal (SYNC-6): the same in every answer, after a
+    // restart too, until the copy is deleted or renamed (also pushed as events when they happen).
+    QJsonArray conflicts;
+    for (const auto folder : FolderMan::instance()->map()) {
+        for (const auto &conflict : folder->singerieConflicts()) {
+            if (conflicts.size() < 100) {
+                conflicts.append(conflict);
+            }
+        }
+    }
+    status.insert(QStringLiteral("conflicts"), conflicts);
+    singerieAnswer(listener, QStringLiteral("SINGERIE_STATUS"), status);
+}
+
+void SocketApi::command_SINGERIE_SUBSCRIBE(const QString &, SocketListener *listener)
+{
+    singerieWatchFolders();
+    if (listener->socket) {
+        if (!_singerieSubscribers.contains(listener->socket)) {
+            _singerieSubscribers.append(listener->socket);
+        }
+    } else {
+        _singerieSubscribedListeners.insert(listener);
+    }
+    singerieAnswer(listener, QStringLiteral("SINGERIE_SUBSCRIBE"), {{QStringLiteral("ok"), true}});
+}
+
+void SocketApi::command_SINGERIE_SCAN(const QString &argument, SocketListener *listener)
+{
+    const auto folder = singerieFolder(argument);
+    if (!folder) {
+        singerieAnswer(listener,
+                       QStringLiteral("SINGERIE_SCAN"),
+                       {{QStringLiteral("ok"), false},
+                        {QStringLiteral("error"), QStringLiteral("not_in_sync_folder")},
+                        {QStringLiteral("message"), QStringLiteral("That place isn't in a sync folder.")}});
+        return;
+    }
+    // A real "look at this path now", instead of MAKE_AVAILABLE_LOCALLY's side effect (A17).
+    const auto relative = QDir(folder->path()).relativeFilePath(QDir::fromNativeSeparators(argument.trimmed()));
+    folder->schedulePathForLocalDiscovery(relative == QStringLiteral(".") ? QString() : relative);
+    folder->journalDb()->schedulePathForRemoteDiscovery(relative == QStringLiteral(".") ? QString() : relative);
+    FolderMan::instance()->scheduleFolder(folder);
+    singerieAnswer(listener, QStringLiteral("SINGERIE_SCAN"), {{QStringLiteral("ok"), true}});
+}
+
+void SocketApi::command_SINGERIE_RELEASE_HOLD(const QString &argument, SocketListener *listener)
+{
+    const auto folder = singerieFolder(argument);
+    if (!folder || !folder->singerieReleaseHold(argument)) {
+        singerieAnswer(
+            listener,
+            QStringLiteral("SINGERIE_RELEASE_HOLD"),
+            {{QStringLiteral("ok"), false},
+             {QStringLiteral("error"), folder ? QStringLiteral("not_held") : QStringLiteral("not_in_sync_folder")},
+             {QStringLiteral("message"), folder ? QStringLiteral("That folder isn't held.") : QStringLiteral("That place isn't in a sync folder.")}});
+        return;
+    }
+    singerieAnswer(listener,
+                   QStringLiteral("SINGERIE_RELEASE_HOLD"),
+                   {{QStringLiteral("ok"), true}, {QStringLiteral("expires"), QDateTime::currentSecsSinceEpoch() + Folder::singerieAnswerLifetime}});
+}
+
+void SocketApi::command_SINGERIE_LOCAL_WIPE_CONFIRM(const QString &argument, SocketListener *listener)
+{
+    const auto folder = singerieFolder(argument);
+    const auto count = folder ? folder->singerieAnswerLocalWipe(true) : -1;
+    if (count < 0) {
+        singerieAnswer(listener,
+                       QStringLiteral("SINGERIE_LOCAL_WIPE_CONFIRM"),
+                       {{QStringLiteral("ok"), false},
+                        {QStringLiteral("error"), QStringLiteral("not_held")},
+                        {QStringLiteral("message"), QStringLiteral("No deletion is waiting in that folder.")}});
+        return;
+    }
+    singerieAnswer(listener,
+                   QStringLiteral("SINGERIE_LOCAL_WIPE_CONFIRM"),
+                   {{QStringLiteral("ok"), true},
+                    {QStringLiteral("count"), count},
+                    {QStringLiteral("expires"), QDateTime::currentSecsSinceEpoch() + Folder::singerieAnswerLifetime}});
+}
+
+void SocketApi::command_SINGERIE_LOCAL_WIPE_RESTORE(const QString &argument, SocketListener *listener)
+{
+    const auto folder = singerieFolder(argument);
+    const auto count = folder ? folder->singerieAnswerLocalWipe(false) : -1;
+    if (count < 0) {
+        singerieAnswer(listener,
+                       QStringLiteral("SINGERIE_LOCAL_WIPE_RESTORE"),
+                       {{QStringLiteral("ok"), false},
+                        {QStringLiteral("error"), QStringLiteral("not_held")},
+                        {QStringLiteral("message"), QStringLiteral("No deletion is waiting in that folder.")}});
+        return;
+    }
+    singerieAnswer(listener,
+                   QStringLiteral("SINGERIE_LOCAL_WIPE_RESTORE"),
+                   {{QStringLiteral("ok"), true},
+                    {QStringLiteral("count"), count},
+                    {QStringLiteral("expires"), QDateTime::currentSecsSinceEpoch() + Folder::singerieAnswerLifetime}});
+}
+
+void SocketApi::command_SINGERIE_BIN_SUMMARY(const QString &, SocketListener *listener)
+{
+    qint64 bytes = 0;
+    auto count = 0;
+    qint64 oldest = 0;
+    QString path;
+    QJsonArray bins;
+    for (const auto folder : FolderMan::instance()->map()) {
+        const auto bin = folder->localBin();
+        if (!bin || !bin->isUsable()) {
+            continue;
+        }
+        const auto summary = bin->summary();
+        bytes += summary.bytes;
+        count += summary.count;
+        if (summary.oldest != 0 && (oldest == 0 || summary.oldest < oldest)) {
+            oldest = summary.oldest;
+        }
+        if (path.isEmpty()) {
+            path = singeriePath(bin->folder());
+        }
+        bins.append(QJsonObject{{QStringLiteral("folder"), singeriePath(folder->path())},
+                                {QStringLiteral("path"), singeriePath(bin->folder())},
+                                {QStringLiteral("bytes"), summary.bytes},
+                                {QStringLiteral("count"), summary.count}});
+    }
+    singerieAnswer(listener,
+                   QStringLiteral("SINGERIE_BIN_SUMMARY"),
+                   {{QStringLiteral("bytes"), bytes},
+                    {QStringLiteral("count"), count},
+                    {QStringLiteral("oldest"), oldest != 0 ? QJsonValue(oldest) : QJsonValue()},
+                    {QStringLiteral("path"), path.isEmpty() ? QJsonValue() : QJsonValue(path)},
+                    {QStringLiteral("bins"), bins}});
+}
+
+void SocketApi::command_SINGERIE_BIN_LIST(const QString &argument, SocketListener *listener)
+{
+    // <offset>U+001E<limit> (the record separator, as between paths); a comma or semicolon also does.
+    auto normalized = argument;
+    normalized.replace(QChar(0x1e), QLatin1Char(',')).replace(QLatin1Char(';'), QLatin1Char(','));
+    const auto parts = normalized.split(QLatin1Char(','));
+    auto offset = parts.value(0).trimmed().toInt();
+    auto limit = parts.size() > 1 ? parts.value(1).trimmed().toInt() : 100;
+    offset = std::max(0, offset);
+    limit = limit <= 0 ? 100 : std::min(limit, 1000);
+    struct Entry {
+        QString id;
+        SingerieBin::Item item;
+    };
+    QList<Entry> entries;
+    for (const auto folder : FolderMan::instance()->map()) {
+        const auto bin = folder->localBin();
+        if (!bin || !bin->isUsable()) {
+            continue;
+        }
+        const auto items = bin->items(0, -1, nullptr);
+        for (const auto &item : items) {
+            entries.append({singerieBinId(*bin, item.id), item});
+        }
+    }
+    std::stable_sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+        return a.item.deletedAt > b.item.deletedAt;
+    });
+    QJsonArray items;
+    for (const auto &entry : entries.mid(offset, limit)) {
+        items.append(QJsonObject{{QStringLiteral("id"), entry.id},
+                                 {QStringLiteral("path"), entry.item.path},
+                                 {QStringLiteral("bytes"), entry.item.bytes},
+                                 {QStringLiteral("deleted_at"), entry.item.deletedAt},
+                                 {QStringLiteral("is_folder"), entry.item.isFolder},
+                                 {QStringLiteral("files"), entry.item.files}});
+    }
+    singerieAnswer(listener,
+                   QStringLiteral("SINGERIE_BIN_LIST"),
+                   {{QStringLiteral("total"), static_cast<int>(entries.size())}, {QStringLiteral("items"), items}});
+}
+
+void SocketApi::command_SINGERIE_BIN_RESTORE(const QString &argument, SocketListener *listener)
+{
+    const auto rootId = argument.section(QLatin1Char(':'), 0, 0).trimmed();
+    const auto itemId = argument.section(QLatin1Char(':'), 1).trimmed();
+    const auto fail = [this, listener](const QString &error, const QString &message) {
+        singerieAnswer(listener,
+                       QStringLiteral("SINGERIE_BIN_RESTORE"),
+                       {{QStringLiteral("ok"), false}, {QStringLiteral("error"), error}, {QStringLiteral("message"), message}});
+    };
+    for (const auto folder : FolderMan::instance()->map()) {
+        const auto bin = folder->localBin();
+        if (!bin || !bin->isUsable() || QFileInfo(bin->folder()).fileName() != rootId) {
+            continue;
+        }
+        // Where the member may add a file: the server's permissions on the nearest folder the journal knows.
+        const auto journal = folder->journalDb();
+        const auto mayCreate = [journal](const QString &path) {
+            auto parent = path.section(QLatin1Char('/'), 0, -2);
+            while (!parent.isEmpty()) {
+                SyncJournalFileRecord record;
+                if (journal->getFileRecord(parent, &record) && record.isValid()) {
+                    return record._remotePerm.isNull() || record._remotePerm.hasPermission(RemotePermissions::CanAddFile);
+                }
+                parent = parent.section(QLatin1Char('/'), 0, -2);
+            }
+            return true;
+        };
+        QString where;
+        switch (bin->restore(itemId, &where, mayCreate)) {
+        case SingerieBin::RestoreResult::Restored:
+            FolderMan::instance()->scheduleFolder(folder);
+            singerieAnswer(listener, QStringLiteral("SINGERIE_BIN_RESTORE"), {{QStringLiteral("ok"), true}, {QStringLiteral("path"), where}});
+            slotSingerieEvent({{QStringLiteral("type"), QStringLiteral("bin_changed")},
+                               {QStringLiteral("bytes"), bin->summary().bytes},
+                               {QStringLiteral("count"), bin->summary().count}});
+            return;
+        case SingerieBin::RestoreResult::Exists:
+            fail(QStringLiteral("exists"), QStringLiteral("Something is already at that place in the sync folder."));
+            return;
+        case SingerieBin::RestoreResult::NotAllowed:
+            fail(QStringLiteral("not_allowed"), QStringLiteral("You can't add files there."));
+            return;
+        case SingerieBin::RestoreResult::Io:
+            fail(QStringLiteral("io"), QStringLiteral("The file couldn't be moved back."));
+            return;
+        case SingerieBin::RestoreResult::Gone:
+            fail(QStringLiteral("gone"), QStringLiteral("That item is no longer in the local bin."));
+            return;
+        }
+    }
+    fail(QStringLiteral("gone"), QStringLiteral("That item is no longer in the local bin."));
+}
+
+void SocketApi::command_SINGERIE_BIN_EMPTY(const QString &, SocketListener *listener)
+{
+    qint64 bytes = 0;
+    auto count = 0;
+    for (const auto folder : FolderMan::instance()->map()) {
+        const auto bin = folder->localBin();
+        if (!bin || !bin->isUsable()) {
+            continue;
+        }
+        const auto emptied = bin->empty();
+        bytes += emptied.first;
+        count += emptied.second;
+    }
+    singerieAnswer(listener,
+                   QStringLiteral("SINGERIE_BIN_EMPTY"),
+                   {{QStringLiteral("ok"), true}, {QStringLiteral("bytes"), bytes}, {QStringLiteral("count"), count}});
+    if (count > 0) {
+        slotSingerieEvent({{QStringLiteral("type"), QStringLiteral("bin_changed")}, {QStringLiteral("bytes"), 0}, {QStringLiteral("count"), 0}});
+    }
 }
 
 void SocketApi::command_VERSION(const QString &, SocketListener *listener)

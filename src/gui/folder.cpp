@@ -40,6 +40,8 @@
 #include <QUrl>
 #include <QDir>
 #include <QSettings>
+#include <QFileInfo>
+#include <QJsonArray>
 
 #include <QMessageBox>
 #include <QPushButton>
@@ -52,6 +54,9 @@ namespace {
 constexpr auto versionC = "version";
 #endif
 }
+
+// csync's own test of Windows' reserved names (CON, AUX, NUL, COM1…, with any extension).
+OCSYNC_EXPORT bool csync_is_windows_reserved_word(const QStringView &filename);
 
 namespace OCC {
 
@@ -85,6 +90,7 @@ Folder::Folder(const FolderDefinition &definition,
     // Singerie's local bin, beside the sync folder: what the server deletes is kept here a while (SingerieBin).
     _bin = QSharedPointer<SingerieBin>::create(path(), SingerieBin::rootIdFromJournalPath(_definition.absoluteJournalPath()));
     _engine.reset(new SyncEngine(_accountState->account(), path(), initializeSyncOptions(), remotePath(), &_journal));
+    singerieConnectEngine();
     // The bin's retention and cap: at start, then at least hourly (also at each sync start).
     _bin->cleanIfDue();
     auto binCleaning = new QTimer(this);
@@ -1186,6 +1192,12 @@ void Folder::startSync(const QStringList &pathList)
     }
 
     _timeSinceLastSyncStart.start();
+    _singerieHeldNow.clear();
+    _singerieWipeThisSync = false;
+    _singerieErrorsNow.clear();
+    _singerieSkippedNow.clear();
+    _singerieUp = 0;
+    _singerieDown = 0;
     _syncResult.setStatus(SyncResult::SyncPrepare);
     Q_EMIT syncStateChange();
 
@@ -1258,7 +1270,7 @@ void Folder::correctPlaceholderFiles()
     }
 }
 
-SyncOptions Folder::initializeSyncOptions() const
+SyncOptions Folder::initializeSyncOptions()
 {
     SyncOptions opt;
     ConfigFile cfgFile;
@@ -1273,6 +1285,37 @@ SyncOptions Folder::initializeSyncOptions() const
     // In a conflict, the newest save keeps the name; the other becomes the conflicted copy (Baptiste, 2 November 2026).
     opt._newestSaveKeepsName = true;
     opt._bin = _bin;
+    // Singerie's answers, for the next sync only (SINGERIE_RELEASE_HOLD, SINGERIE_LOCAL_WIPE_*), and only while they
+    // still answer the hold or the wipe they were given about, for ten minutes at most (SYNC-2).
+    {
+        const auto now = QDateTime::currentSecsSinceEpoch();
+        _singerieReleasesInSync.clear();
+        _singerieWipeAnsweredAtInSync = 0;
+        for (auto it = _singerieReleases.begin(); it != _singerieReleases.end();) {
+            if (!singerieAnswerStillGood(it.value().second, it.value().first, _singerieHeld.value(it.key()), now)) {
+                qCInfo(lcFolder) << "Singerie's release of" << it.key() << "no longer applies: dropped";
+                it = _singerieReleases.erase(it);
+                continue;
+            }
+            if (it.key().isEmpty()) {
+                opt._releaseHold = true;
+            } else {
+                opt._releasedFolders.append(it.key());
+            }
+            _singerieReleasesInSync.insert(it.key(), it.value().second);
+            ++it;
+        }
+        if (_singerieWipeAnswer != SyncOptions::LocalWipeAnswer::None
+            && !singerieAnswerStillGood(_singerieWipeAnsweredAt, _singerieWipeAnsweredSince, _singerieWipeSince, now)) {
+            qCInfo(lcFolder) << "Singerie's answer to the local wipe of" << path() << "no longer applies: dropped";
+            _singerieWipeAnswer = SyncOptions::LocalWipeAnswer::None;
+        }
+        opt._localWipeAnswer = _singerieWipeAnswer;
+        opt._localWipeAnsweredCount = _singerieWipeAnswer == SyncOptions::LocalWipeAnswer::None ? 0 : _singerieWipeAnsweredCount;
+        if (_singerieWipeAnswer != SyncOptions::LocalWipeAnswer::None) {
+            _singerieWipeAnsweredAtInSync = _singerieWipeAnsweredAt;
+        }
+    }
     opt._vfs = _vfs;
 
     const auto capsMaxConcurrentChunkUploads = account->capabilities().maxConcurrentChunkUploads();
@@ -1411,6 +1454,69 @@ void Folder::slotSyncFinished(bool success)
     // all come in.
     QTimer::singleShot(200, this, &Folder::slotEmitFinishedDelayed);
 
+    // What Singerie reads (SINGERIE_STATUS and its events).
+    {
+        const auto folderPath = QDir::toNativeSeparators(QDir::cleanPath(path()));
+        if (!_singerieProgress.isEmpty()) {
+            // Nothing moves any more: one last progress event says so.
+            _singerieProgress = {};
+            _singerieProgressSent.invalidate();
+            Q_EMIT singerieEvent({{QStringLiteral("type"), QStringLiteral("progress")},
+                                  {QStringLiteral("folder"), folderPath},
+                                  {QStringLiteral("bytes"), 0},
+                                  {QStringLiteral("total"), 0},
+                                  {QStringLiteral("speed"), 0},
+                                  {QStringLiteral("files"), QJsonArray{}}});
+        }
+        if (success) {
+            _singerieLastSync = QDateTime::currentSecsSinceEpoch();
+            // One-shot answers, applied by this sync: only those it was given (one that came while it ran waits for
+            // the next sync; found on the bench, where a release given during a sync was dropped unapplied).
+            for (auto it = _singerieReleasesInSync.cbegin(); it != _singerieReleasesInSync.cend(); ++it) {
+                if (_singerieReleases.contains(it.key()) && _singerieReleases.value(it.key()).second == it.value()) {
+                    _singerieReleases.remove(it.key());
+                }
+            }
+            _singerieReleasesInSync.clear();
+            if (_singerieWipeAnsweredAtInSync != 0 && _singerieWipeAnsweredAt == _singerieWipeAnsweredAtInSync) {
+                _singerieWipeAnswer = SyncOptions::LocalWipeAnswer::None;
+            }
+            _singerieWipeAnsweredAtInSync = 0;
+            // A hold this sync didn't make again has ended (the server shows the folder again, or it was followed).
+            const auto held = _singerieHeld.keys();
+            for (const auto &relative : held) {
+                if (!_singerieHeldNow.contains(relative)) {
+                    singerieHoldEnded(relative);
+                }
+            }
+        }
+        if (success && !_singerieWipeThisSync && _singerieWipeCount != 0) {
+            _singerieWipeCount = 0;
+            _singerieWipeSince = 0;
+        }
+        _singerieErrors = _singerieErrorsNow;
+        _singerieSkipped = _singerieSkippedNow;
+        if (!_singerieHeldNow.contains(QString()) && !_singerieWipeThisSync) {
+            for (const auto &message : _syncResult.errorStrings()) {
+                _singerieErrors.append({folderPath, message});
+            }
+        }
+        _singerieUp = 0;
+        _singerieDown = 0;
+        if (_bin && _bin->isUsable()) {
+            const auto bin = _bin->summary();
+            if (bin.bytes != _singerieBinBytes || bin.count != _singerieBinCount) {
+                const auto first = _singerieBinCount < 0;
+                _singerieBinBytes = bin.bytes;
+                _singerieBinCount = bin.count;
+                if (!first) {
+                    Q_EMIT singerieEvent(
+                        {{QStringLiteral("type"), QStringLiteral("bin_changed")}, {QStringLiteral("bytes"), bin.bytes}, {QStringLiteral("count"), bin.count}});
+                }
+            }
+        }
+    }
+
     _lastSyncDuration = std::chrono::milliseconds(_timeSinceLastSyncStart.elapsed());
     _timeSinceLastSyncDone.start();
 
@@ -1430,6 +1536,181 @@ void Folder::slotSyncFinished(bool success)
         // the folder again.
         scheduleThisFolderSoon();
     }
+}
+
+void Folder::singerieConnectEngine()
+{
+    const auto now = [] {
+        return QDateTime::currentSecsSinceEpoch();
+    };
+    const auto folderPath = [this] {
+        return QDir::toNativeSeparators(QDir::cleanPath(path()));
+    };
+    connect(_engine.data(), &SyncEngine::syncHeld, this, [this](SyncFileItem::Direction) {
+        singerieHoldStarted(QString());
+    });
+    connect(_engine.data(), &SyncEngine::folderHeld, this, [this](const QString &folder) {
+        singerieHoldStarted(folder);
+    });
+    connect(_engine.data(), &SyncEngine::folderReleased, this, [this](const QString &folder) {
+        singerieHoldEnded(folder);
+    });
+    connect(_engine.data(), &SyncEngine::localWipeHeld, this, [this, now, folderPath](int count) {
+        _singerieWipeThisSync = true;
+        _singerieWipeCount = count;
+        if (_singerieWipeSince == 0) {
+            _singerieWipeSince = now();
+            Q_EMIT singerieEvent({{QStringLiteral("type"), QStringLiteral("local_wipe_held")},
+                                  {QStringLiteral("folder"), folderPath()},
+                                  {QStringLiteral("count"), count},
+                                  {QStringLiteral("since"), _singerieWipeSince}});
+        }
+    });
+    connect(_engine.data(), &SyncEngine::localWipeAnswered, this, [this](int) {
+        _singerieWipeCount = 0;
+        _singerieWipeSince = 0;
+        _singerieWipeAnswer = SyncOptions::LocalWipeAnswer::None;
+    });
+    connect(_engine.data(),
+            &SyncEngine::conflictResolved,
+            this,
+            [this](const QString &kept, const QString &copy, bool keptFromLocal, qint64 keptMtime, qint64 copyMtime) {
+                Q_EMIT singerieEvent({{QStringLiteral("type"), QStringLiteral("conflict")},
+                                      {QStringLiteral("kept"), QDir::toNativeSeparators(path() + kept)},
+                                      {QStringLiteral("copy"), QDir::toNativeSeparators(path() + copy)},
+                                      {QStringLiteral("kept_from"), keptFromLocal ? QStringLiteral("local") : QStringLiteral("server")},
+                                      {QStringLiteral("kept_mtime"), keptMtime},
+                                      {QStringLiteral("copy_mtime"), copyMtime}});
+            });
+    connect(_engine.data(), &SyncEngine::aboutToPropagate, this, [this](SyncFileItemVector &items) {
+        _singerieUp = 0;
+        _singerieDown = 0;
+        for (const auto &item : std::as_const(items)) {
+            if (item->isDirectory()
+                || !(item->_instruction == CSYNC_INSTRUCTION_NEW || item->_instruction == CSYNC_INSTRUCTION_SYNC
+                     || item->_instruction == CSYNC_INSTRUCTION_CONFLICT || item->_instruction == CSYNC_INSTRUCTION_TYPE_CHANGE)) {
+                continue;
+            }
+            if (item->_direction == SyncFileItem::Up) {
+                ++_singerieUp;
+            } else if (item->_direction == SyncFileItem::Down) {
+                ++_singerieDown;
+            }
+        }
+    });
+}
+
+QJsonArray Folder::singerieConflicts() const
+{
+    QJsonArray conflicts;
+    const auto journal = journalDb();
+    if (!journal) {
+        return conflicts;
+    }
+    const auto root = QDir::cleanPath(path()) + QLatin1Char('/');
+    const auto paths = journal->conflictRecordPaths();
+    for (const auto &raw : paths) {
+        if (conflicts.size() >= 100) {
+            break;
+        }
+        const auto copy = QString::fromUtf8(raw);
+        const auto copyPath = root + copy;
+        if (!FileSystem::fileExists(copyPath)) {
+            continue; // resolved: the copy was deleted or renamed (the record goes at the end of the next sync)
+        }
+        const auto record = journal->conflictRecord(raw);
+        auto kept = QString::fromUtf8(record.initialBasePath);
+        if (kept.isEmpty()) {
+            kept = QString::fromUtf8(Utility::conflictFileBaseNameFromPattern(raw));
+        }
+        const auto keptPath = root + kept;
+        const auto local = journal->keyValueStoreGetInt(SyncEngine::singerieConflictKey("local", copy), 0) == 1;
+        auto keptMtime = journal->keyValueStoreGetInt(SyncEngine::singerieConflictKey("kept", copy), 0);
+        auto copyMtime = journal->keyValueStoreGetInt(SyncEngine::singerieConflictKey("copy", copy), 0);
+        if (keptMtime == 0) {
+            // Made before Singerie kept its details (an older build, upstream's own paths): the server's file kept the
+            // name, the times as the files are now.
+            keptMtime = FileSystem::fileExists(keptPath) ? FileSystem::getModTime(keptPath) : record.baseModtime;
+            copyMtime = FileSystem::getModTime(copyPath);
+        }
+        conflicts.append(QJsonObject{{QStringLiteral("kept"), QDir::toNativeSeparators(keptPath)},
+                                     {QStringLiteral("copy"), QDir::toNativeSeparators(copyPath)},
+                                     {QStringLiteral("kept_from"), local ? QStringLiteral("local") : QStringLiteral("server")},
+                                     {QStringLiteral("kept_mtime"), keptMtime},
+                                     {QStringLiteral("copy_mtime"), copyMtime}});
+    }
+    return conflicts;
+}
+
+QList<QPair<QString, qint64>> Folder::singerieHeldFolders() const
+{
+    QList<QPair<QString, qint64>> held;
+    const auto root = QDir::cleanPath(path());
+    for (auto it = _singerieHeld.cbegin(); it != _singerieHeld.cend(); ++it) {
+        const auto absolute = it.key().isEmpty() ? root : root + QLatin1Char('/') + it.key();
+        held.append({QDir::toNativeSeparators(absolute), it.value()});
+    }
+    return held;
+}
+
+bool Folder::singerieAnswerStillGood(qint64 answeredAt, qint64 answeredSince, qint64 currentSince, qint64 now)
+{
+    return currentSince != 0 && answeredSince == currentSince && now >= answeredAt && now - answeredAt < singerieAnswerLifetime;
+}
+
+void Folder::singerieHoldStarted(const QString &relative)
+{
+    _singerieHeldNow.insert(relative);
+    if (_singerieHeld.contains(relative)) {
+        return;
+    }
+    const auto since = QDateTime::currentSecsSinceEpoch();
+    _singerieHeld.insert(relative, since);
+    const auto root = QDir::cleanPath(path());
+    Q_EMIT singerieEvent({{QStringLiteral("type"), QStringLiteral("held")},
+                          {QStringLiteral("folder"), QDir::toNativeSeparators(relative.isEmpty() ? root : root + QLatin1Char('/') + relative)},
+                          {QStringLiteral("direction"), QStringLiteral("server")},
+                          {QStringLiteral("since"), since}});
+}
+
+void Folder::singerieHoldEnded(const QString &relative)
+{
+    _singerieReleases.remove(relative);
+    if (!_singerieHeld.remove(relative)) {
+        return;
+    }
+    const auto root = QDir::cleanPath(path());
+    Q_EMIT singerieEvent({{QStringLiteral("type"), QStringLiteral("unheld")},
+                          {QStringLiteral("folder"), QDir::toNativeSeparators(relative.isEmpty() ? root : root + QLatin1Char('/') + relative)}});
+}
+
+bool Folder::singerieReleaseHold(const QString &folder)
+{
+    auto relative = QDir(path()).relativeFilePath(QDir::fromNativeSeparators(folder.trimmed()));
+    if (relative == QStringLiteral(".")) {
+        relative.clear();
+    }
+    if (!_singerieHeld.contains(relative)) {
+        return false;
+    }
+    qCInfo(lcFolder) << "Singerie releases the hold of" << (relative.isEmpty() ? path() : relative) << ": the next sync follows the server";
+    _singerieReleases.insert(relative, {_singerieHeld.value(relative), QDateTime::currentSecsSinceEpoch()});
+    FolderMan::instance()->scheduleFolder(this);
+    return true;
+}
+
+int Folder::singerieAnswerLocalWipe(bool deleteEverywhere)
+{
+    if (_singerieWipeCount == 0) {
+        return -1;
+    }
+    qCInfo(lcFolder) << "Singerie answers the local wipe of" << path() << (deleteEverywhere ? ": delete everywhere" : ": put them back");
+    _singerieWipeAnswer = deleteEverywhere ? SyncOptions::LocalWipeAnswer::DeleteEverywhere : SyncOptions::LocalWipeAnswer::PutBack;
+    _singerieWipeAnsweredAt = QDateTime::currentSecsSinceEpoch();
+    _singerieWipeAnsweredSince = _singerieWipeSince;
+    _singerieWipeAnsweredCount = _singerieWipeCount;
+    FolderMan::instance()->scheduleFolder(this);
+    return _singerieWipeCount;
 }
 
 void Folder::slotEmitFinishedDelayed()
@@ -1454,6 +1735,112 @@ void Folder::slotTransmissionProgress(const ProgressInfo &pi)
 {
     Q_EMIT progressInfo(pi);
     ProgressDispatcher::instance()->setProgressInfo(alias(), pi);
+
+    // Singerie: progress within each file (A24), pushed at most once a second, and when a file starts or ends.
+    if (pi.status() != ProgressInfo::Propagation) {
+        return;
+    }
+    auto progress = singerieProgressOf(pi, path());
+    const auto sameFiles = [](const QJsonObject &a, const QJsonObject &b) {
+        QStringList left;
+        QStringList right;
+        for (const auto &file : a.value(QStringLiteral("files")).toArray()) {
+            left.append(file.toObject().value(QStringLiteral("path")).toString());
+        }
+        for (const auto &file : b.value(QStringLiteral("files")).toArray()) {
+            right.append(file.toObject().value(QStringLiteral("path")).toString());
+        }
+        return left == right;
+    };
+    const auto due = !_singerieProgressSent.isValid() || _singerieProgressSent.elapsed() >= 1000 || !sameFiles(progress, _singerieProgress);
+    _singerieProgress = progress;
+    if (due) {
+        _singerieProgressSent.start();
+        progress.insert(QStringLiteral("type"), QStringLiteral("progress"));
+        Q_EMIT singerieEvent(progress);
+    }
+}
+
+QJsonObject Folder::singerieSkippedName(const QString &root, const SyncFileItem &item)
+{
+    if (item._status != SyncFileItem::FileNameInvalid && item._status != SyncFileItem::FileNameInvalidOnServer) {
+        return {};
+    }
+    const auto relative = item.destination();
+    const auto name = relative.mid(relative.lastIndexOf(QLatin1Char('/')) + 1);
+    const auto absolute = QDir::cleanPath(root + QLatin1Char('/') + relative);
+    QString why;
+    QString renamedTo;
+    const auto trimmedEnd = [](QString text) {
+        while (!text.isEmpty() && text.back().isSpace()) {
+            text.chop(1);
+        }
+        return text;
+    };
+    if (name.endsWith(QLatin1Char(' '))) {
+        why = QStringLiteral("trailing_space");
+        const auto renamed = QDir::cleanPath(QFileInfo(absolute).absolutePath() + QLatin1Char('/') + trimmedEnd(name));
+        if (!QFileInfo::exists(absolute) && QFileInfo::exists(renamed)) {
+            renamedTo = renamed;
+        }
+    } else if (name.startsWith(QLatin1Char(' '))) {
+        why = QStringLiteral("leading_space");
+    } else if (csync_is_windows_reserved_word(name)) {
+        why = QStringLiteral("reserved");
+    } else if (name.endsWith(QLatin1Char('.'))) {
+        why = QStringLiteral("trailing_dot");
+    } else if (std::any_of(name.cbegin(), name.cend(), [](QChar c) {
+                   return QStringView(u"\\:?*\"<>|").contains(c) || c.unicode() < 32;
+               })) {
+        why = QStringLiteral("invalid_char");
+    } else if (name.size() > 255) {
+        why = QStringLiteral("too_long");
+    } else if (item._status == SyncFileItem::FileNameInvalidOnServer) {
+        why = QStringLiteral("server");
+    } else {
+        why = QStringLiteral("invalid");
+    }
+    QJsonObject body{
+        {QStringLiteral("path"), QDir::toNativeSeparators(absolute)},
+        {QStringLiteral("why"), why},
+        {QStringLiteral("message"), item._errorString},
+        {QStringLiteral("direction"), item._direction == SyncFileItem::Down ? QStringLiteral("down") : QStringLiteral("up")},
+    };
+    if (!renamedTo.isEmpty()) {
+        body.insert(QStringLiteral("renamed_to"), QDir::toNativeSeparators(renamedTo));
+    }
+    return body;
+}
+
+QJsonObject Folder::singerieProgressOf(const ProgressInfo &pi, const QString &root, int maxFiles)
+{
+    QList<ProgressInfo::ProgressItem> items = pi._currentItems.values();
+    std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+        return a._item._size != b._item._size ? a._item._size > b._item._size : a._item._file < b._item._file;
+    });
+    QJsonArray files;
+    for (const auto &item : std::as_const(items)) {
+        if (files.size() >= maxFiles) {
+            break;
+        }
+        if (item._item.isDirectory()) {
+            continue;
+        }
+        files.append(QJsonObject{
+            {QStringLiteral("path"), QDir::toNativeSeparators(QDir::cleanPath(root + QLatin1Char('/') + item._item._file))},
+            {QStringLiteral("direction"), item._item._direction == SyncFileItem::Up ? QStringLiteral("up") : QStringLiteral("down")},
+            {QStringLiteral("bytes"), item._progress.completed()},
+            {QStringLiteral("total"), item._item._size},
+            {QStringLiteral("speed"), pi.fileProgress(item._item).estimatedBandwidth},
+        });
+    }
+    return {
+        {QStringLiteral("folder"), QDir::toNativeSeparators(QDir::cleanPath(root))},
+        {QStringLiteral("bytes"), pi.completedSize()},
+        {QStringLiteral("total"), pi.totalSize()},
+        {QStringLiteral("speed"), pi.totalProgress().estimatedBandwidth},
+        {QStringLiteral("files"), files},
+    };
 }
 
 // a item is completed: count the errors and forward to the ProgressDispatcher
@@ -1471,6 +1858,31 @@ void Folder::slotItemCompleted(const SyncFileItemPtr &item, ErrorCategory errorC
     }
 
     _syncResult.processCompletedItem(item);
+
+    if (item->isDirectory() == false && (item->_direction == SyncFileItem::Up || item->_direction == SyncFileItem::Down)
+        && (item->_instruction == CSYNC_INSTRUCTION_NEW || item->_instruction == CSYNC_INSTRUCTION_SYNC || item->_instruction == CSYNC_INSTRUCTION_CONFLICT
+            || item->_instruction == CSYNC_INSTRUCTION_TYPE_CHANGE)) {
+        auto &left = item->_direction == SyncFileItem::Up ? _singerieUp : _singerieDown;
+        left = std::max(0, left - 1);
+    }
+    const auto isError = item->_status == SyncFileItem::NormalError || item->_status == SyncFileItem::FatalError || item->_status == SyncFileItem::SoftError
+        || item->_status == SyncFileItem::DetailError || item->_status == SyncFileItem::BlacklistedError;
+    if (isError && _singerieErrorsNow.size() < 50) {
+        _singerieErrorsNow.append({QDir::toNativeSeparators(path() + item->destination()), item->_errorString});
+    }
+    // Singerie (A30): a name this PC can't hold, or the server refuses, is never left out in silence.
+    if (auto skipped = singerieSkippedName(path(), *item); !skipped.isEmpty()) {
+        const auto where = skipped.value(QStringLiteral("path")).toString();
+        if (_singerieSkippedNow.size() < 200) {
+            _singerieSkippedNow.append(skipped);
+        }
+        if (!_singerieSkippedTold.contains(where)) {
+            _singerieSkippedTold.insert(where);
+            qCInfo(lcFolder) << "Left out for its name:" << where << skipped.value(QStringLiteral("why")).toString();
+            skipped.insert(QStringLiteral("type"), QStringLiteral("skipped_name"));
+            Q_EMIT singerieEvent(skipped);
+        }
+    }
 
     _fileLog->logItem(*item);
     Q_EMIT ProgressDispatcher::instance()->itemCompleted(alias(), item, errorCategory);
