@@ -13,6 +13,8 @@
 #include <QMutex>
 #include <QSettings>
 
+#include <algorithm>
+
 Q_LOGGING_CATEGORY(lcSingerieSettings, "nextcloud.sync.singeriesettings", QtInfoMsg)
 
 namespace OCC
@@ -25,6 +27,8 @@ struct Values {
     qint64 uploadLimitKBps = -1;
     qint64 downloadLimitKBps = -1;
     qint64 keepFreeBytes = -1;
+    qint64 binRetentionDays = -1;
+    qint64 binMaxBytes = -1;
 };
 
 QMutex mutex;
@@ -67,6 +71,8 @@ Values current()
         values.uploadLimitKBps = readNumber(settings, QStringLiteral("transfers/uploadLimitKBps"));
         values.downloadLimitKBps = readNumber(settings, QStringLiteral("transfers/downloadLimitKBps"));
         values.keepFreeBytes = readNumber(settings, QStringLiteral("space/keepFreeBytes"));
+        values.binRetentionDays = readNumber(settings, QStringLiteral("bin/retentionDays"));
+        values.binMaxBytes = readNumber(settings, QStringLiteral("bin/maxBytes"));
         qCInfo(lcSingerieSettings) << "Read" << path << "upload limit" << values.uploadLimitKBps << "download limit" << values.downloadLimitKBps << "keep free"
                                    << values.keepFreeBytes;
     }
@@ -103,6 +109,17 @@ qint64 SingerieSettings::downloadLimitKBps()
 qint64 SingerieSettings::keepFreeBytes()
 {
     return current().keepFreeBytes;
+}
+
+int SingerieSettings::binRetentionDays()
+{
+    const auto days = current().binRetentionDays;
+    return days >= 1 && days <= 365 ? static_cast<int>(days) : 30;
+}
+
+qint64 SingerieSettings::binMaxBytes()
+{
+    return std::max<qint64>(0, current().binMaxBytes);
 }
 
 } // namespace OCC

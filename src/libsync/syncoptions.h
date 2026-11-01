@@ -18,6 +18,8 @@
 
 namespace OCC {
 
+class SingerieBin;
+
 /**
  * Value class containing the options given to the sync engine
  */
@@ -75,6 +77,10 @@ public:
     /** The smallest number of the member's own files whose deletion at once counts as a local wipe (fewer is an
      * ordinary delete and follows). The whole sync folder emptied on this PC is a wipe whatever its size. */
     static constexpr int localWipeMinimumFiles = 10;
+
+    /** The local bin (Singerie's client): files this PC holds in full that the server deleted are moved there instead
+     * of deleted, and moved back instead of downloaded when the server's file comes back the same. Null: deleted. */
+    QSharedPointer<SingerieBin> _bin;
 
     /** Create a virtual file for new files instead of downloading. May not be null */
     QSharedPointer<Vfs> _vfs;

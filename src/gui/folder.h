@@ -29,6 +29,7 @@ class QSettings;
 namespace OCC {
 
 class Vfs;
+class SingerieBin;
 class SyncEngine;
 class AccountState;
 class SyncRunFileLog;
@@ -242,6 +243,11 @@ public:
 
     // Used by the Socket API
     [[nodiscard]] SyncJournalDb *journalDb() const { return &_journal; }
+    /// Singerie's local bin of this sync folder.
+    [[nodiscard]] QSharedPointer<SingerieBin> localBin() const
+    {
+        return _bin;
+    }
     [[nodiscard]] SyncEngine &syncEngine() const { return *_engine; }
     [[nodiscard]] Vfs &vfs() const { return *_vfs; }
 
@@ -591,6 +597,9 @@ private:
     int _consecutiveFollowUpSyncs = 0;
 
     mutable SyncJournalDb _journal;
+
+    /// Singerie's local bin of this sync folder (SingerieBin), beside it on the same drive.
+    QSharedPointer<SingerieBin> _bin;
 
     QScopedPointer<SyncRunFileLog> _fileLog;
 

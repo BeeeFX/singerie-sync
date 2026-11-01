@@ -458,6 +458,8 @@ public:
                               QString &removedDirectory,
                               QString &maybeConflictDirectory);
 
+    /// Singerie's local bin (SyncOptions::_bin) holds this very file in full, and nothing is at its place.
+    [[nodiscard]] bool localBinHolds(const SyncFileItem &item) const;
     void addBulkPropagateDownloadItem(const SyncFileItemPtr &item, QStack<QPair<QString, PropagateDirectory *>> &directories);
 
     void processE2eeMetadataMigration(const SyncFileItemPtr &item, QStack<QPair<QString, PropagateDirectory *>> &directories);

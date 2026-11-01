@@ -22,6 +22,7 @@
 #include <QDateTime>
 #include <qstack.h>
 #include <QCoreApplication>
+#include "singeriebin.h"
 
 #include <filesystem>
 #include <ctime>
@@ -138,6 +139,50 @@ bool PropagateLocalRemove::removeRecursively(const QString &path)
     return success;
 }
 
+void PropagateLocalRemove::moveToLocalBin(const QString &filename, const QFileInfo &fileInfo)
+{
+    // Singerie's local bin: what this PC holds in full is kept (moved, same drive) instead of deleted. Never a
+    // placeholder (nothing to keep), never the member's own deletes (those go the other way, Up).
+    const auto bin = propagator()->syncOptions()._bin;
+    if (!bin || !bin->isUsable()) {
+        return;
+    }
+    const auto vfs = propagator()->syncOptions()._vfs;
+    QString error;
+    if (fileInfo.isDir()) {
+        QList<QPair<QString, SyncJournalFileRecord>> files;
+        QDirIterator it(filename, QDir::Files | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const auto path = it.next();
+            if (vfs && vfs->isDehydratedPlaceholder(path)) {
+                continue;
+            }
+            const auto relative = _item->_file + QLatin1Char('/') + QDir(filename).relativeFilePath(path);
+            SyncJournalFileRecord record;
+            if (!propagator()->_journal->getFileRecord(relative, &record)) {
+                record = {};
+            }
+            Q_EMIT propagator()->touchedFile(path);
+            files.append({relative, record});
+        }
+        if (!files.isEmpty() && !bin->takeFolder(_item->_file, files, &error)) {
+            qCWarning(lcPropagateLocalRemove) << "Not everything of" << _item->_file << "went to the local bin:" << error;
+        }
+        return;
+    }
+    if (vfs && vfs->isDehydratedPlaceholder(filename)) {
+        return;
+    }
+    SyncJournalFileRecord record;
+    if (!propagator()->_journal->getFileRecord(_item->_originalFile, &record)) {
+        record = {};
+    }
+    Q_EMIT propagator()->touchedFile(filename);
+    if (!bin->takeFile(_item->_file, record, &error)) {
+        qCWarning(lcPropagateLocalRemove) << "Could not move" << _item->_file << "to the local bin, deleting it:" << error;
+    }
+}
+
 void PropagateLocalRemove::start()
 {
     qCInfo(lcPropagateLocalRemove) << "Start propagate local remove job";
@@ -196,7 +241,12 @@ void PropagateLocalRemove::start()
             moveToTrashIsFeasible = false;
         }
     }
-    if (_moveToTrash && moveToTrashIsFeasible) {
+    if (_item->_direction == SyncFileItem::Down && FileSystem::fileExists(filename, fileInfo)) {
+        moveToLocalBin(filename, fileInfo);
+    }
+    if (!FileSystem::fileExists(filename)) {
+        // Moved to the local bin (or already gone): nothing left to delete.
+    } else if (_moveToTrash && moveToTrashIsFeasible) {
         if (FileSystem::fileExists(filename, fileInfo)) {
             const auto parentFolderPath = fileInfo.dir().absolutePath();
             const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};

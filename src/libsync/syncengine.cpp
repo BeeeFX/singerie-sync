@@ -23,6 +23,7 @@
 #include "common/vfs.h"
 #include "clientsideencryption.h"
 #include "clientsideencryptionjobs.h"
+#include "singeriebin.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -534,6 +535,9 @@ void SyncEngine::startSync()
     s_anySyncRunning = true;
     _syncRunning = true;
     _anotherSyncNeeded = NoFollowUpSync;
+    if (_syncOptions._bin) {
+        _syncOptions._bin->cleanIfDue(); // the local bin's retention and cap (singerie.ini), at most hourly
+    }
     _clearTouchedFilesTimer.stop();
 
     _hasNoneFiles = false;

@@ -24,6 +24,7 @@
 #include "discoveryphase.h"
 #include "syncfileitem.h"
 #include "foldermetadata.h"
+#include "singeriebin.h"
 #include "singeriesettings.h"
 
 #ifdef Q_OS_WIN
@@ -698,10 +699,16 @@ void OwncloudPropagator::startFilePropagation(const SyncFileItemPtr &item,
         removedDirectory = item->_file + "/";
     } else {
         const auto isVfsCfApi = syncOptions()._vfs && syncOptions()._vfs->mode() == Vfs::WindowsCfApi;
-        const auto isDownload = item->_direction == SyncFileItem::Down &&
-            (item->_instruction == CSYNC_INSTRUCTION_NEW || item->_instruction == CSYNC_INSTRUCTION_SYNC);
-        const auto isVirtualFile = item->_type == ItemTypeVirtualFile;
+        const auto isDownload =
+            item->_direction == SyncFileItem::Down && (item->_instruction == CSYNC_INSTRUCTION_NEW || item->_instruction == CSYNC_INSTRUCTION_SYNC);
         const auto isEncrypted = item->_e2eEncryptionStatus != SyncFileItem::EncryptionStatus::NotEncrypted;
+        if (isDownload && item->_type == ItemTypeVirtualFile && !isEncrypted && localBinHolds(*item)) {
+            // Singerie's local bin holds this very file in full: it comes back whole through the ordinary download
+            // job (which takes it from the bin), not as an empty placeholder made in bulk.
+            qCInfo(lcPropagator) << "the local bin holds" << item->_file << ", restoring it whole";
+            item->_type = ItemTypeFile;
+        }
+        const auto isVirtualFile = item->_type == ItemTypeVirtualFile;
         const auto shouldAddBulkPropagateDownloadItem = isDownload && isVirtualFile && isVfsCfApi && !isEncrypted;
 
         if (shouldAddBulkPropagateDownloadItem) {
@@ -716,6 +723,13 @@ void OwncloudPropagator::startFilePropagation(const SyncFileItemPtr &item,
         // directory we want to skip processing items inside it.
         maybeConflictDirectory = item->_file + "/";
     }
+}
+
+bool OwncloudPropagator::localBinHolds(const SyncFileItem &item) const
+{
+    const auto bin = _syncOptions._bin;
+    return bin && bin->isUsable() && item._size > 0 && !FileSystem::fileExists(fullLocalPath(item._file))
+        && bin->findMatch(item._file, item._size, item._modtime, item._checksumHeader, item._etag, item._fileId).has_value();
 }
 
 void OwncloudPropagator::addBulkPropagateDownloadItem(const SyncFileItemPtr &item, QStack<QPair<QString, PropagateDirectory *>> &directories)

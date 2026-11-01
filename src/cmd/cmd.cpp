@@ -45,6 +45,7 @@
 #include "theme.h"
 #include "netrcparser.h"
 #include "libsync/logger.h"
+#include "libsync/singeriebin.h"
 
 #include "config.h"
 
@@ -669,6 +670,8 @@ restart_sync:
     syncOptions.setIsCmd(true);
     // As the desktop client: a sync folder emptied at once is held, nothing deleted (SyncOptions).
     syncOptions._holdWhenEverythingVanishes = true;
+    // As the desktop client: files deleted on the server go to the local bin beside the sync folder.
+    syncOptions._bin = QSharedPointer<SingerieBin>::create(options.source_dir, SingerieBin::rootIdFromJournalPath(dbPath));
     SyncEngine engine(account, options.source_dir, syncOptions, folder, &db);
     engine.setIgnoreHiddenFiles(options.ignoreHiddenFiles);
     engine.setNetworkLimits(options.uplimit, options.downlimit);

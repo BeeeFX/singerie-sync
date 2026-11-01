@@ -30,6 +30,7 @@
 #include "creds/abstractcredentials.h"
 #include "settingsdialog.h"
 #include "vfsdownloaderrordialog.h"
+#include "singeriebin.h"
 
 #ifdef Q_OS_MACOS
 #include "common/utility_mac_sandbox.h"
@@ -81,7 +82,19 @@ Folder::Folder(const FolderDefinition &definition,
 
     _syncResult.setFolder(_definition.alias);
 
+    // Singerie's local bin, beside the sync folder: what the server deletes is kept here a while (SingerieBin).
+    _bin = QSharedPointer<SingerieBin>::create(path(), SingerieBin::rootIdFromJournalPath(_definition.absoluteJournalPath()));
     _engine.reset(new SyncEngine(_accountState->account(), path(), initializeSyncOptions(), remotePath(), &_journal));
+    // The bin's retention and cap: at start, then at least hourly (also at each sync start).
+    _bin->cleanIfDue();
+    auto binCleaning = new QTimer(this);
+    binCleaning->setInterval(std::chrono::minutes(60));
+    connect(binCleaning, &QTimer::timeout, this, [this] {
+        if (!isBusy()) {
+            _bin->cleanIfDue();
+        }
+    });
+    binCleaning->start();
     // pass the setting if hidden files are to be ignored, will be read in csync_update
     _engine->setIgnoreHiddenFiles(_definition.ignoreHiddenFiles);
 
@@ -1257,6 +1270,7 @@ SyncOptions Folder::initializeSyncOptions() const
     opt._moveFilesToTrash = cfgFile.moveToTrash();
     // Singerie's client shows no window: no "delete all files?" prompt; a sync folder emptied at once is held instead.
     opt._holdWhenEverythingVanishes = true;
+    opt._bin = _bin;
     opt._vfs = _vfs;
 
     const auto capsMaxConcurrentChunkUploads = account->capabilities().maxConcurrentChunkUploads();

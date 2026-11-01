@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <QFileInfo>
+
 #include "owncloudpropagator.h"
 #include <QFile>
 
@@ -54,6 +56,8 @@ public:
 
 private:
     bool removeRecursively(const QString &path);
+    /// Moves what this PC holds in full at `filename` into the local bin (SyncOptions::_bin), if there is one.
+    void moveToLocalBin(const QString &filename, const QFileInfo &fileInfo);
 
     QSet<QString> _deleteToClientTrashBin;
 
