@@ -1113,6 +1113,7 @@ void SyncEngine::finishSync()
     connect(_propagator.data(), &OwncloudPropagator::finished, this, &SyncEngine::slotPropagationFinished, Qt::QueuedConnection);
     connect(_propagator.data(), &OwncloudPropagator::seenLockedFile, this, &SyncEngine::seenLockedFile);
     connect(_propagator.data(), &OwncloudPropagator::touchedFile, this, &SyncEngine::slotAddTouchedFile);
+    connect(_propagator.data(), &OwncloudPropagator::conflictResolved, this, &SyncEngine::conflictResolved);
     connect(_propagator.data(), &OwncloudPropagator::insufficientLocalStorage, this, &SyncEngine::slotInsufficientLocalStorage);
     connect(_propagator.data(), &OwncloudPropagator::insufficientRemoteStorage, this, &SyncEngine::slotInsufficientRemoteStorage);
     connect(_propagator.data(), &OwncloudPropagator::newItem, this, &SyncEngine::slotNewItem);

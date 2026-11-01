@@ -227,6 +227,9 @@ private Q_SLOTS:
     void conflictChecksumComputed(const QByteArray &checksumType, const QByteArray &checksum);
     /// Called to start downloading the remote file
     void startDownload();
+    /// SyncOptions::_newestSaveKeepsName: this PC's save is newer than the server's: it keeps the name, the
+    /// downloaded server file becomes the conflicted copy, and the newest goes up at the next sync.
+    void keepLocalAsNewest(const QString &filename);
     /// The local bin's copy of this very file (SyncOptions::_bin), when there is one and nothing is at its place.
     std::optional<SingerieBin::File> localBinMatch();
     /// Called when the GETFileJob finishes

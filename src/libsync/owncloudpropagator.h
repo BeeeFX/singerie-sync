@@ -592,8 +592,7 @@ public:
      *
      * Returns true on success, false and error on error.
      */
-    bool createConflict(const SyncFileItemPtr &item,
-        PropagatorCompositeJob *composite, QString *error);
+    bool createConflict(const SyncFileItemPtr &item, PropagatorCompositeJob *composite, QString *error, QString *conflictFileNameOut = nullptr);
 
     /** Handles a case clash conflict by renaming the file 'item'.
      *
@@ -683,6 +682,10 @@ Q_SIGNALS:
      * from the file watcher about these can be ignored.
      */
     void touchedFile(const QString &fileName);
+
+    /** A conflict was resolved into two files: `kept` keeps the name, `copy` is the conflicted copy; `keptFromLocal`:
+     * the kept one is this PC's save (else the server's); the mtimes of both (SyncOptions::_newestSaveKeepsName). */
+    void conflictResolved(const QString &kept, const QString &copy, bool keptFromLocal, qint64 keptMtime, qint64 copyMtime);
 
     void insufficientLocalStorage();
     void insufficientRemoteStorage();

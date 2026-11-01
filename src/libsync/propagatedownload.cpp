@@ -1234,6 +1234,13 @@ void PropagateDownloadFile::downloadFinished()
     }
 
     auto previousFileExists = FileSystem::fileExists(filename) && _item->_instruction != CSYNC_INSTRUCTION_CASE_CLASH_CONFLICT;
+    if (previousFileExists && _item->_instruction == CSYNC_INSTRUCTION_CONFLICT && propagator()->syncOptions()._newestSaveKeepsName
+        && !FileSystem::isDir(filename) && FileSystem::getModTime(filename) > _item->_modtime
+        && (_item->_remotePerm.isNull() || _item->_remotePerm.hasPermission(RemotePermissions::CanWrite))
+        && !FileSystem::fileEquals(filename, _tmpFile.fileName())) {
+        keepLocalAsNewest(filename);
+        return;
+    }
     if (previousFileExists) {
         // Preserve the existing file permissions.
         const auto existingFile = QFileInfo{filename};
@@ -1288,11 +1295,14 @@ void PropagateDownloadFile::downloadFinished()
             return;
         } else {
             QString error;
-            if (!propagator()->createConflict(_item, _associatedComposite, &error)) {
+            QString conflictFileName;
+            const auto localMtime = FileSystem::getModTime(filename);
+            if (!propagator()->createConflict(_item, _associatedComposite, &error, &conflictFileName)) {
                 done(SyncFileItem::SoftError, error, ErrorCategory::GenericError);
                 return;
             } else {
                 previousFileExists = false;
+                Q_EMIT propagator()->conflictResolved(_item->_file, conflictFileName, false, _item->_modtime, localMtime);
             }
         }
     }
@@ -1400,6 +1410,50 @@ void PropagateDownloadFile::downloadFinished()
     }
 
     updateMetadata(isConflict);
+}
+
+void PropagateDownloadFile::keepLocalAsNewest(const QString &filename)
+{
+    const auto localMtime = FileSystem::getModTime(filename);
+    if (!FileSystem::verifyFileUnchanged(filename, _item->_previousSize, _item->_previousModtime)) {
+        FileSystem::remove(_tmpFile.fileName());
+        propagator()->_anotherSyncNeeded = true;
+        done(SyncFileItem::SoftError, tr("File has changed since discovery"), ErrorCategory::GenericError);
+        return;
+    }
+    // The server's file, which is older, becomes the conflicted copy (named after its own date); this PC's newer save
+    // keeps the name.
+    const auto copyName = Utility::makeConflictFileName(_item->_file, Utility::qDateTimeFromTime_t(_item->_modtime), {});
+    const auto copyPath = propagator()->fullLocalPath(copyName);
+    Q_EMIT propagator()->touchedFile(copyPath);
+    QString error;
+    if (!FileSystem::rename(_tmpFile.fileName(), copyPath, &error)) {
+        done(SyncFileItem::SoftError, error, ErrorCategory::GenericError);
+        return;
+    }
+    FileSystem::setFileHidden(copyPath, false);
+    qCInfo(lcPropagateDownload) << "Conflict: this PC's save of" << _item->_file << "is the newest (" << localMtime << ">" << _item->_modtime
+                                << "), it keeps the name; the server's file becomes" << copyName;
+
+    // The journal knows the server's file at the name: this PC's save then reads as changed here and goes up next.
+    auto record = _item->toSyncJournalFileRecordWithInode(filename);
+    record._type = ItemTypeFile;
+    if (!propagator()->_journal->setFileRecord(record)) {
+        done(SyncFileItem::FatalError, tr("Error updating metadata: %1").arg(_item->_file), ErrorCategory::GenericError);
+        return;
+    }
+    ConflictRecord conflictRecord;
+    conflictRecord.path = copyName.toUtf8();
+    conflictRecord.baseFileId = _item->_fileId;
+    conflictRecord.baseEtag = _item->_etag;
+    conflictRecord.baseModtime = _item->_modtime;
+    conflictRecord.initialBasePath = _item->_file.toUtf8();
+    propagator()->_journal->setConflictRecord(conflictRecord);
+    propagator()->_journal->setDownloadInfo(_item->_file, SyncJournalDb::DownloadInfo());
+    propagator()->_journal->commit("conflict: the newest save keeps the name");
+    propagator()->_anotherSyncNeeded = true;
+    Q_EMIT propagator()->conflictResolved(_item->_file, copyName, true, localMtime, _item->_modtime);
+    done(SyncFileItem::Conflict, {}, ErrorCategory::NoError);
 }
 
 void PropagateDownloadFile::updateMetadata(bool isConflict)
