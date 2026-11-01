@@ -302,6 +302,16 @@ void PropagateUploadFileNG::slotMkColFinished()
 void PropagateUploadFileNG::finishUpload()
 {
     Q_ASSERT(_jobs.isEmpty()); // There should be no running job anymore
+
+    // The last look before the server puts the file in place: a file that grew or changed while its chunks went up
+    // is not assembled (the server keeps what it had); the next sync sends it whole.
+    const auto fullFilePath = propagator()->fullLocalPath(_item->_file);
+    if (!FileSystem::verifyFileUnchanged(fullFilePath, _item->_size, _item->_modtime)) {
+        qCInfo(lcPropagateUploadNG) << "Not assembling" << _item->_file << "on the server: it changed while it went up";
+        propagator()->_anotherSyncNeeded = true;
+        abortWithError(SyncFileItem::SoftError, tr("Local file changed during sync."));
+        return;
+    }
     _finished = true;
 
     // Finish with a MOVE
