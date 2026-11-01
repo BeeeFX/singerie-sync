@@ -17,7 +17,10 @@
 #include "socketapi/socketapi_p.h"
 #include "syncengine.h"
 #include "syncenginetestutils.h"
+#include "sslerrordialog.h"
+#include "systray.h"
 #include "testhelper.h"
+#include "theme.h"
 
 #include "common/syncjournalfilerecord.h"
 
@@ -345,6 +348,27 @@ private Q_SLOTS:
     }
 
     /*
+     * SYNC-8: the invisible client never shows the "untrusted certificate" window: the certificate is refused and the
+     * status says `certificate`.
+     */
+    void testInvisibleShowsNoTopLevelWindow()
+    {
+        QVERIFY(Theme::singerieInvisible());
+        auto account = Account::create();
+        account->setUrl(QUrl(QStringLiteral("https://files.example")));
+        SslDialogErrorHandler handler;
+        QList<QSslCertificate> certs;
+        const QList<QSslError> errors{QSslError(QSslError::SelfSignedCertificate)};
+        QVERIFY(!handler.handleErrors(errors, {}, &certs, account));
+        QVERIFY(certs.isEmpty());
+        QVERIFY(account->property("singerieCertificateRefused").toBool());
+        const auto widgets = QApplication::topLevelWidgets();
+        for (const auto widget : widgets) {
+            QVERIFY2(!widget->isVisible(), qPrintable(widget->windowTitle()));
+        }
+    }
+
+    /*
      * SYNC-2: an answer applies to the hold or the wipe it was given about, for ten minutes.
      */
     void testAnswersExpire()
@@ -463,6 +487,25 @@ private Q_SLOTS:
         for (const auto &event : statusEvents) {
             QVERIFY(!event.contains(QStringLiteral("progress")));
         }
+    }
+
+    /*
+     * Invisible: the client's pop-ups go to Singerie as events; --version names the build.
+     */
+    void testInvisible()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.path());
+        QVERIFY(Theme::singerieInvisible());
+        QVERIFY(Theme::instance()->versionSwitchOutput().contains(QStringLiteral("Singerie Sync build ")));
+        RecordingListener subscriber;
+        ask(QStringLiteral("SINGERIE_SUBSCRIBE"), {}, subscriber);
+        Systray::instance()->showMessage(QStringLiteral("Sync error"), QStringLiteral("Something to say"));
+        const auto notification = subscriber.events(QStringLiteral("notification")).value(0);
+        QCOMPARE(notification.value(QStringLiteral("title")).toString(), QStringLiteral("Sync error"));
+        QCOMPARE(notification.value(QStringLiteral("message")).toString(), QStringLiteral("Something to say"));
+        QVERIFY(!Systray::instance()->isVisible());
     }
 
     /*

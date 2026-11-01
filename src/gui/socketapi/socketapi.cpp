@@ -814,6 +814,9 @@ void SocketApi::singerieWatchFolders()
     for (const auto folder : FolderMan::instance()->map()) {
         connect(folder, &Folder::singerieEvent, this, &SocketApi::slotSingerieEvent, Qt::UniqueConnection);
         connect(folder, &Folder::syncStateChange, this, &SocketApi::slotSingerieStatusMaybeChanged, Qt::UniqueConnection);
+        if (const auto state = folder->accountState()) {
+            connect(state, &AccountState::stateChanged, this, &SocketApi::slotSingerieAccountState, Qt::UniqueConnection);
+        }
     }
 }
 
@@ -957,6 +960,15 @@ void SocketApi::singerieBroadcast(const QJsonObject &event)
 void SocketApi::slotSingerieEvent(const QJsonObject &event)
 {
     singerieBroadcast(event);
+    slotSingerieStatusMaybeChanged();
+}
+
+void SocketApi::slotSingerieAccountState()
+{
+    const auto state = qobject_cast<AccountState *>(sender());
+    if (state && state->state() == AccountState::AskingCredentials) {
+        singerieBroadcast({{QStringLiteral("type"), QStringLiteral("credentials_failed")}, {QStringLiteral("account"), state->account()->displayName()}});
+    }
     slotSingerieStatusMaybeChanged();
 }
 

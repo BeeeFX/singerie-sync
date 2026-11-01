@@ -229,6 +229,7 @@ public:
 private Q_SLOTS:
     void slotSingerieEvent(const QJsonObject &event);
     void slotSingerieStatusMaybeChanged();
+    void slotSingerieAccountState();
 
 private:
     void singerieWatchFolders();

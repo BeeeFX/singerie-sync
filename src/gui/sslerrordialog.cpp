@@ -59,6 +59,17 @@ bool SslDialogErrorHandler::handleErrors(QList<QSslError> errors, const QSslConf
         *certs = dlg.unknownCerts();
         return true;
     }
+    if (Theme::singerieInvisible()) {
+        // Singerie Sync shows no window (SYNC-8): never "trust this certificate anyway" from a program the member has
+        // never seen (a network in the middle would get the sync's password). Refused, logged, and said to Singerie
+        // (SINGERIE_STATUS's account: "certificate") until the account connects again.
+        for (const auto &error : std::as_const(errors)) {
+            qCWarning(lcSslErrorDialog) << "Certificate refused for" << account->url().host() << ":" << error.errorString() << "SHA-256"
+                                        << error.certificate().digest(QCryptographicHash::Sha256).toHex();
+        }
+        account->setProperty("singerieCertificateRefused", true);
+        return false;
+    }
     // whether the user accepted the certs
     if (dlg.exec() == QDialog::Accepted) {
         if (dlg.trustConnection()) {

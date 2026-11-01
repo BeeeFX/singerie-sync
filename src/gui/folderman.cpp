@@ -541,6 +541,9 @@ bool FolderMan::ensureJournalGone(const QString &journalDbFile)
     // remove the old journal file
     while (QFile::exists(journalDbFile) && !QFile::remove(journalDbFile)) {
         qCWarning(lcFolderMan) << "Could not remove old db file at" << journalDbFile;
+        if (Theme::singerieInvisible()) {
+            return false; // no window nobody would see (SYNC-8): the caller says why
+        }
         int ret = QMessageBox::warning(nullptr, tr("Could not reset folder state"),
             tr("An old sync journal \"%1\" was found, "
                "but could not be removed. Please make sure "

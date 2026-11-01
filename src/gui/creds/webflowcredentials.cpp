@@ -142,6 +142,10 @@ void WebFlowCredentials::fetchFromKeychain(const QString &appName) {
 }
 
 void WebFlowCredentials::askFromUser() {
+    if (Theme::singerieInvisible()) {
+        qCWarning(lcWebFlowCredentials) << "The server refused the app password; Singerie signs in again (no window)";
+        return;
+    }
     if (_reAuthWindow) {
         _reAuthWindow->show();
         return;

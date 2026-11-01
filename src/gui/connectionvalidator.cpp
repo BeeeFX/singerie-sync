@@ -21,6 +21,7 @@
 #include "localnetworkpermission.h"
 #include <creds/abstractcredentials.h>
 #include "systray.h"
+#include "theme.h"
 
 namespace OCC {
 
@@ -327,6 +328,10 @@ bool ConnectionValidator::setAndCheckServerVersion(const QString &version)
 
 void ConnectionValidator::checkServerTermsOfService()
 {
+    if (Theme::singerieInvisible()) {
+        termsOfServiceCheckDone(); // nobody to show terms to; the collective's server has none
+        return;
+    }
     _termsOfServiceChecker.start();
 }
 
