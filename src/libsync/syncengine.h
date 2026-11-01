@@ -184,6 +184,26 @@ Q_SIGNALS:
      */
     void aboutToRemoveAllFiles(OCC::SyncFileItem::Direction direction, std::function<void(bool)> f);
 
+    /// The sync was held because every file of the sync folder would be deleted at once (SyncOptions::
+    /// _holdWhenEverythingVanishes): Down when the server shows the folder empty, Up when this PC does.
+    void syncHeld(OCC::SyncFileItem::Direction direction);
+
+    /// One folder the server removed was held on its own (SyncOptions::holdFolderMaxDepth, SYNC-1): `folder` is its
+    /// path relative to the sync folder; nothing below it was deleted and the rest of the sync went on.
+    void folderHeld(const QString &folder);
+
+    /// A held folder was followed in this sync because the managing application released it
+    /// (SyncOptions::_releasedFolders).
+    void folderReleased(const QString &folder);
+
+    /// A local wipe was held (SyncOptions::_localWipeAnswer None): `count` of the member's own files were deleted on
+    /// this PC at once, nothing was deleted on the server.
+    void localWipeHeld(int count);
+
+    /// A held local wipe was answered in this sync: `count` deletions went to the server (DeleteEverywhere) or are
+    /// brought back from it (PutBack).
+    void localWipeAnswered(int count);
+
     // A new folder was discovered and was not synced because of the confirmation feature
     void newBigFolder(const QString &folder, bool isExternal);
 
@@ -365,6 +385,19 @@ private:
     [[nodiscard]] bool shouldRestartSync() const;
 
     bool handleMassDeletion();
+
+    /// The number of the member's own files this sync would delete on the server when that is a local wipe
+    /// (SyncOptions::_localWipeAnswer), else 0.
+    int localWipeCount(bool everythingDeleted);
+
+    /// Singerie's holds of a single folder (SYNC-1): the folders the server removed near the top of the sync folder,
+    /// with enough files, are taken out of this sync. Returns the folders held.
+    QStringList holdVanishedFolders();
+
+    /// The files (and online-only files) the journal knows, all of them (`path` empty) or below `path`.
+    int journalFileCount(const QString &path);
+    /// Drops this sync's local deletions and forgets them in the journal, so the next sync brings them back.
+    int putBackLocalDeletions();
 
     void handleRemnantReadOnlyFolders();
 

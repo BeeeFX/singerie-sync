@@ -667,6 +667,8 @@ restart_sync:
     syncOptions.fillFromEnvironmentVariables();
     syncOptions.verifyChunkSizes();
     syncOptions.setIsCmd(true);
+    // As the desktop client: a sync folder emptied at once is held, nothing deleted (SyncOptions).
+    syncOptions._holdWhenEverythingVanishes = true;
     SyncEngine engine(account, options.source_dir, syncOptions, folder, &db);
     engine.setIgnoreHiddenFiles(options.ignoreHiddenFiles);
     engine.setNetworkLimits(options.uplimit, options.downlimit);
