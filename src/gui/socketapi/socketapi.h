@@ -141,6 +141,8 @@ private:
     Q_INVOKABLE void command_SINGERIE_BIN_LIST(const QString &argument, OCC::SocketListener *listener);
     Q_INVOKABLE void command_SINGERIE_BIN_RESTORE(const QString &argument, OCC::SocketListener *listener);
     Q_INVOKABLE void command_SINGERIE_BIN_EMPTY(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_PREFETCH(const QString &argument, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_SINGERIE_PREFETCH_CANCEL(const QString &argument, OCC::SocketListener *listener);
 
     Q_INVOKABLE void command_SHARE_MENU_TITLE(const QString &argument, OCC::SocketListener *listener);
 

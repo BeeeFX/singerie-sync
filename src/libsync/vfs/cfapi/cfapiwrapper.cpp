@@ -15,6 +15,7 @@
 #include "theme.h"
 #include "vfs_cfapi.h"
 #include "common/syncjournaldb.h"
+#include "singerieownreads.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -26,6 +27,7 @@
 #include <QLoggingCategory>
 #include <QPromise>
 #include <QUuid>
+#include <QScopeGuard>
 
 #include <cfapi.h>
 #include <comdef.h>
@@ -264,11 +266,21 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
     qCInfo(lcCfApiWrapper) << "Fetch data requested by process id:" << callbackInfo->ProcessInfo->ProcessId;
     qCInfo(lcCfApiWrapper) << "Fetch data requested by application id:" << QString(QString::fromWCharArray(callbackInfo->ProcessInfo->ApplicationId));
 
-    if (QCoreApplication::applicationPid() == callbackInfo->ProcessInfo->ProcessId) {
+    const auto ownRead = QCoreApplication::applicationPid() == callbackInfo->ProcessInfo->ProcessId;
+    if (ownRead && !OCC::SingerieOwnReads::allowed(path)) {
         qCCritical(lcCfApiWrapper) << "implicit hydration triggered by the client itself. Will lead to a deadlock. Cancel" << path << requestId;
         sendTransferError();
         return;
     }
+    // Singerie's pre-download (from worker threads, announced) steps aside while the member's own programs read.
+    if (!ownRead) {
+        OCC::SingerieOwnReads::memberHydrationStarted();
+    }
+    const auto memberCounted = qScopeGuard([ownRead] {
+        if (!ownRead) {
+            OCC::SingerieOwnReads::memberHydrationFinished();
+        }
+    });
 
     // Set up connections before requesting hydration as it could happen that
     // the hydration request finishes before the connections were set up.
@@ -576,7 +588,7 @@ void CALLBACK cfApiFetchPlaceHolders(const CF_CALLBACK_INFO *callbackInfo, const
     Q_ASSERT(vfs->metaObject()->className() == QByteArrayLiteral("OCC::VfsCfApi"));
     const auto requestId = QString::number(callbackInfo->TransferKey.QuadPart, 16);
 
-    if (QCoreApplication::applicationPid() == callbackInfo->ProcessInfo->ProcessId) {
+    if (QCoreApplication::applicationPid() == callbackInfo->ProcessInfo->ProcessId && !OCC::SingerieOwnReads::allowed(path)) {
         qCCritical(lcCfApiWrapper) << "implicit hydration triggered by the client itself. Will lead to a deadlock. Cancel" << path << requestId;
         sendTransferError();
         return;

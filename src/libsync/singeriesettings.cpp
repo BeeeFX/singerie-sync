@@ -30,6 +30,7 @@ struct Values {
     bool syncPaused = false;
     qint64 transfersParallel = -1;
     bool bulkUpload = false;
+    qint64 prefetchParallel = -1;
     qint64 binRetentionDays = -1;
     qint64 binMaxBytes = -1;
 };
@@ -77,6 +78,7 @@ Values current()
         values.syncPaused = settings.value(QStringLiteral("sync/paused"), false).toBool();
         values.transfersParallel = readNumber(settings, QStringLiteral("transfers/parallel"));
         values.bulkUpload = settings.value(QStringLiteral("transfers/bulkUpload"), false).toBool();
+        values.prefetchParallel = readNumber(settings, QStringLiteral("prefetch/parallel"));
         values.binRetentionDays = readNumber(settings, QStringLiteral("bin/retentionDays"));
         values.binMaxBytes = readNumber(settings, QStringLiteral("bin/maxBytes"));
         qCInfo(lcSingerieSettings) << "Read" << path << "upload limit" << values.uploadLimitKBps << "download limit" << values.downloadLimitKBps << "keep free"
@@ -128,6 +130,13 @@ int SingerieSettings::transfersParallel()
 bool SingerieSettings::bulkUpload()
 {
     return current().bulkUpload;
+}
+
+int SingerieSettings::prefetchParallel()
+{
+    // Low priority: a few at once, so the member's own transfers and opens keep most of the line.
+    const auto parallel = current().prefetchParallel;
+    return parallel >= 1 && parallel <= 16 ? static_cast<int>(parallel) : 3;
 }
 
 bool SingerieSettings::syncPaused()

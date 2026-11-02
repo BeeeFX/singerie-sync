@@ -6,6 +6,8 @@
 
 #include "socketapi.h"
 #include "socketapi_p.h"
+#include "singerieownreads.h"
+#include "singerieprefetch.h"
 
 #include "conflictsolver.h"
 
@@ -811,6 +813,7 @@ Folder *SocketApi::singerieFolder(const QString &path) const
 
 void SocketApi::singerieWatchFolders()
 {
+    connect(SingeriePrefetch::instance(), &SingeriePrefetch::event, this, &SocketApi::singerieBroadcast, Qt::UniqueConnection);
     for (const auto folder : FolderMan::instance()->map()) {
         connect(folder, &Folder::singerieEvent, this, &SocketApi::slotSingerieEvent, Qt::UniqueConnection);
         connect(folder, &Folder::syncStateChange, this, &SocketApi::slotSingerieStatusMaybeChanged, Qt::UniqueConnection);
@@ -903,6 +906,9 @@ QJsonObject SocketApi::singerieStatus() const
         {QStringLiteral("local_wipes"), wipes},
         {QStringLiteral("progress"), progress.isEmpty() ? QJsonValue() : QJsonValue(progress)},
         {QStringLiteral("skipped"), skipped},
+        {QStringLiteral("prefetch"), SingeriePrefetch::instance()->status()},
+        // Other programs reading online-only files now (SYNC-9: Singerie waits for none before replacing the client).
+        {QStringLiteral("member_reads"), SingerieOwnReads::memberHydrations()},
         {QStringLiteral("account"), account},
         {QStringLiteral("folders"), folders.size()},
     };
@@ -1005,6 +1011,7 @@ void SocketApi::command_SINGERIE_HELLO(const QString &, SocketListener *listener
                        {QStringLiteral("version"), QStringLiteral(SINGERIE_SYNC_VERSION)},
                        {QStringLiteral("bin"), true},
                        {QStringLiteral("adopt"), true},
+                       {QStringLiteral("prefetch"), true},
                        {QStringLiteral("events"),
                         QJsonArray{QStringLiteral("status"),
                                    QStringLiteral("held"),
@@ -1014,7 +1021,8 @@ void SocketApi::command_SINGERIE_HELLO(const QString &, SocketListener *listener
                                    QStringLiteral("bin_changed"),
                                    QStringLiteral("credentials_failed"),
                                    QStringLiteral("progress"),
-                                   QStringLiteral("skipped_name")}},
+                                   QStringLiteral("skipped_name"),
+                                   QStringLiteral("prefetch")}},
                    });
 }
 
@@ -1066,6 +1074,27 @@ void SocketApi::command_SINGERIE_SCAN(const QString &argument, SocketListener *l
     folder->journalDb()->schedulePathForRemoteDiscovery(relative == QStringLiteral(".") ? QString() : relative);
     FolderMan::instance()->scheduleFolder(folder);
     singerieAnswer(listener, QStringLiteral("SINGERIE_SCAN"), {{QStringLiteral("ok"), true}});
+}
+
+void SocketApi::command_SINGERIE_PREFETCH(const QString &argument, SocketListener *listener)
+{
+    singerieWatchFolders();
+    QJsonParseError parseError;
+    const auto request = QJsonDocument::fromJson(argument.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !request.isObject()) {
+        singerieAnswer(listener,
+                       QStringLiteral("SINGERIE_PREFETCH"),
+                       {{QStringLiteral("ok"), false},
+                        {QStringLiteral("error"), QStringLiteral("bad_request")},
+                        {QStringLiteral("message"), QStringLiteral("Expected {\"paths\": [...]}.")}});
+        return;
+    }
+    singerieAnswer(listener, QStringLiteral("SINGERIE_PREFETCH"), SingeriePrefetch::instance()->start(request.object()));
+}
+
+void SocketApi::command_SINGERIE_PREFETCH_CANCEL(const QString &argument, SocketListener *listener)
+{
+    singerieAnswer(listener, QStringLiteral("SINGERIE_PREFETCH_CANCEL"), SingeriePrefetch::instance()->cancel(argument.trimmed()));
 }
 
 void SocketApi::command_SINGERIE_RELEASE_HOLD(const QString &argument, SocketListener *listener)

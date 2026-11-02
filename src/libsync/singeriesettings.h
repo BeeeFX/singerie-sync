@@ -21,6 +21,7 @@ namespace OCC
  *               bulkUpload                           true/false, absent = false: small files several per request
  *   [space]     keepFreeBytes                        downloads stop below this much free space; absent = the
  *                                                    OWNCLOUD_FREE_SPACE_BYTES variable or the client's 1 GB
+ *   [prefetch]  parallel                             1–16, absent = 3: files Singerie's pre-download fetches at once
  *   [sync]      paused                               true/false, absent = false: no sync runs (the running one stops)
  *   [bin]       retentionDays                        1–365, absent = 30: how long the local bin keeps a file
  *               maxBytes                             0 or absent = no cap; else the oldest go past that size
@@ -43,6 +44,9 @@ public:
     static int transfersParallel();
     /// `[transfers] bulkUpload`: small, settled files go up several per request where the server offers it.
     static bool bulkUpload();
+
+    /// `[prefetch] parallel`: files the pre-download (SINGERIE_PREFETCH) fetches at once (1–16; 3 when absent).
+    static int prefetchParallel();
 
     /// `[sync] paused`: Singerie's Pause (Settings › Files). Replaces the folder's own `paused` key (A27).
     static bool syncPaused();

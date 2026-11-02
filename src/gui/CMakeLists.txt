@@ -71,6 +71,8 @@ set(client_SRCS
     accountsetupfromcommandlinejob.cpp
     singerieprovision.h
     singerieprovision.cpp
+    singerieprefetch.h
+    singerieprefetch.cpp
     accountsetupcommandlinemanager.h
     accountsetupcommandlinemanager.cpp
     application.h
@@ -782,7 +784,8 @@ if (APPLE)
 endif()
 
 if (WIN32)
-    target_link_libraries(nextcloudCore PRIVATE xaudio2)
+    # cldapi: Singerie's pre-download hydrates placeholders itself (singerieprefetch.cpp).
+    target_link_libraries(nextcloudCore PRIVATE xaudio2 cldapi)
     target_compile_definitions(nextcloudCore PRIVATE NEXTCLOUD_HAS_NATIVE_SOUND_BACKEND)
 endif()
 
