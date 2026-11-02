@@ -217,12 +217,30 @@ void SingerieProvision::start()
 void SingerieProvision::updateExisting(AccountState *state)
 {
     const auto account = state->account();
+    // The same account with another folder: the sync folder moves there (Singerie's Move...: it moves the files
+    // first, then provisions the new place, usually with `adopt`). The old place is handed back to Windows (its sync
+    // root unregistered, its journal forgotten); its files are never touched.
+    QString movedFrom;
+    QList<Folder *> others;
     for (const auto folder : FolderMan::instance()->map()) {
         if (folder->accountState() == state && !samePath(folder->path(), _request.localPath)) {
-            fail(QStringLiteral("account_exists"),
-                 QStringLiteral("This account already syncs another folder: %1.").arg(QDir::toNativeSeparators(cleanLocal(folder->path()))));
+            others.append(folder);
+        }
+    }
+    if (others.size() > 1) {
+        fail(QStringLiteral("account_exists"),
+             QStringLiteral("This account already syncs several folders: %1.").arg(QDir::toNativeSeparators(cleanLocal(others.first()->path()))));
+        return;
+    }
+    if (others.size() == 1) {
+        const auto [code, message] = checkFolder(_request.localPath, _request.adopt);
+        if (!code.isEmpty()) {
+            fail(code, message);
             return;
         }
+        movedFrom = QDir::toNativeSeparators(cleanLocal(others.first()->path()));
+        qCInfo(lcSingerieProvision) << "The sync folder moves from" << movedFrom << "to" << QDir::toNativeSeparators(_request.localPath);
+        FolderMan::instance()->removeFolder(others.first());
     }
     if (account->url() != _request.server) {
         qCInfo(lcSingerieProvision) << "The account moves to the server's new address" << _request.server.toString();
@@ -231,16 +249,19 @@ void SingerieProvision::updateExisting(AccountState *state)
     qCInfo(lcSingerieProvision) << "Updating the app password of" << account->displayName();
     account->setCredentials(new WebFlowCredentials(_request.user, _request.appPassword));
     _account = account;
+    _movedFrom = movedFrom;
     waitForCredentials([this, state] {
         const auto folders = FolderMan::instance()->map();
         const auto hasFolder = std::any_of(folders.cbegin(), folders.cend(), [state](Folder *folder) {
             return folder->accountState() == state;
         });
         if (!hasFolder) {
-            const auto [code, message] = checkFolder(_request.localPath, _request.adopt);
-            if (!code.isEmpty()) {
-                fail(code, message);
-                return;
+            if (_movedFrom.isEmpty()) {
+                const auto [code, message] = checkFolder(_request.localPath, _request.adopt);
+                if (!code.isEmpty()) {
+                    fail(code, message);
+                    return;
+                }
             }
             addAccountAndFolder();
             return;
@@ -335,11 +356,14 @@ void SingerieProvision::addAccountAndFolder()
         folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncWhiteList, QStringList() << QLatin1String("/"));
         qCInfo(lcSingerieProvision) << "Provisioned" << _account->displayName() << "syncing" << QDir::toNativeSeparators(_request.localPath)
                                     << (_request.adopt ? "(adopting what is there)" : "");
-        finish(QJsonDocument(QJsonObject{{QStringLiteral("ok"), true},
-                                         {QStringLiteral("account"), _account->displayName()},
-                                         {QStringLiteral("folder"), QDir::toNativeSeparators(cleanLocal(_request.localPath))}})
-                   .toJson(QJsonDocument::Compact),
-               true);
+        auto answer = QJsonObject{{QStringLiteral("ok"), true},
+                                  {QStringLiteral("account"), _account->displayName()},
+                                  {QStringLiteral("folder"), QDir::toNativeSeparators(cleanLocal(_request.localPath))}};
+        if (!_movedFrom.isEmpty()) {
+            answer.insert(QStringLiteral("updated"), true);
+            answer.insert(QStringLiteral("moved_from"), _movedFrom);
+        }
+        finish(QJsonDocument(answer).toJson(QJsonDocument::Compact), true);
     };
     if (known) {
         addFolder();

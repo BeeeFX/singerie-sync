@@ -29,7 +29,7 @@ class AccountState;
  *   {"ok": false, "error": "<code>", "message": "<English sentence>"}
  *
  * Codes: bad_request, bad_credentials, server_unreachable, folder_not_ntfs, folder_in_other_sync_root,
- * folder_not_empty (only without adopt), account_exists (the account already syncs another folder), client_running.
+ * folder_not_empty (only without adopt), account_exists (the account already syncs several folders; one other folder is moved: "moved_from"), client_running.
  * The app password goes to Windows' credential store as the client keeps it; it is never logged or written anywhere
  * else. A second provision of the same account updates its app password (and its address, from replace_url_from).
  */
@@ -72,6 +72,7 @@ private:
 
     Request _request;
     AccountPtr _account;
+    QString _movedFrom; ///< the folder the account synced before, when this provisioning moves it
 };
 
 } // namespace OCC
