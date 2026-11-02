@@ -28,6 +28,9 @@ What it changes, and why:
 | No tray icon, pop-ups, wizard, sign-in window or status polls (`SINGERIE_SHOW_UI=1` shows them again) | The managing application is the one place the user looks |
 | A file changed in the last minute goes up in chunks and is only put in place on the server if it is unchanged before the final MOVE | A file still being written never sits truncated on the server |
 | The release name is Singerie Sync (`singeriesync.exe`, its own config folder, pipe and Windows ids) | It runs beside an official client without touching it, and doesn't pass as Nextcloud's |
+| Eight files move at once by default (`[transfers] parallel`, 1–32), with as many HTTP/1.1 connections; bulk upload only when asked (`[transfers] bulkUpload`), for small files unchanged for a minute | A render's thousands of frames were three at a time; bulk upload stays off until proven, and never reads a file still being written |
+| `SINGERIE_PREFETCH`: files and folders brought onto the PC in the background, a few at once, stepping aside for the user's own sync and opens, never below the free-space line, nothing pinned | A task's files are ready before they're opened; only what was asked |
+| Progressive hydration for the file endings `[hydration] progressive` lists (video, caches read in order); every other file still arrives whole before its first read | A preview plays at once instead of after the whole file; scenes keep failing at open, never half-read |
 
 The list of patches and how they're rebuilt on a new Nextcloud release is kept with the application that installs
 this client. Everything here stays under the GNU General Public License version 2 or later, like the original
