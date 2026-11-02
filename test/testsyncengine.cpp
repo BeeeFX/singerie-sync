@@ -12,6 +12,7 @@
 #include <QTextCodec>
 
 #include "syncenginetestutils.h"
+#include "singeriesettings.h"
 
 #include "caseclashconflictsolver.h"
 #include "configfile.h"
@@ -924,7 +925,8 @@ private Q_SLOTS:
         QTimer::singleShot(100, &fakeFolder.syncEngine(), [&]() { fakeFolder.syncEngine().abort(); });
         QVERIFY(!fakeFolder.syncOnce());
 
-        QCOMPARE(nPUT, 3);
+        // Singerie: as many chunks at once as `[transfers] parallel` (8 by default; upstream: 3).
+        QCOMPARE(nPUT, SingerieSettings::transfersParallel());
     }
 
 #ifndef Q_OS_WIN

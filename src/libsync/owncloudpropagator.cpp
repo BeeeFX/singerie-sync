@@ -93,7 +93,9 @@ int OwncloudPropagator::maximumActiveTransferJob()
         // it doesn't force one file at a time (Singerie's A23).
         return 1;
     }
-    return qMin(3, qCeil(_syncOptions._parallelNetworkJobs / 2.));
+    // Upstream: at most 3, whatever the server offers (A23). Singerie's `[transfers] parallel` (8 by default) says
+    // how many files move at once; the HTTP/1.1 connections per server follow it (AccessManager).
+    return SingerieSettings::transfersParallel();
 }
 
 /* The maximum number of active jobs in parallel  */
@@ -102,7 +104,8 @@ int OwncloudPropagator::hardMaximumActiveJob()
     if (!_syncOptions._parallelNetworkJobs) {
         return 1;
     }
-    return _syncOptions._parallelNetworkJobs;
+    // Room beside the transfers for the quick jobs (folders made, deletes, moves).
+    return qMax(_syncOptions._parallelNetworkJobs, maximumActiveTransferJob() + 2);
 }
 
 PropagateItemJob::~PropagateItemJob()
@@ -1170,9 +1173,20 @@ Result<Vfs::ConvertToPlaceholderResult, QString> OwncloudPropagator::staticUpdat
 
 bool OwncloudPropagator::isDelayedUploadItem(const SyncFileItemPtr &item) const
 {
-    Q_UNUSED(item)
-
-    return false;
+    // Upstream turned bulk upload off. Singerie turns it on with `[transfers] bulkUpload` where the server offers it,
+    // for small files only, and never for a file changed in the last minute: a bulk request reads the file while it
+    // sends it, like a single PUT, so a file still being written would arrive truncated (A10's rule, createUploadJob).
+    if (!SingerieSettings::bulkUpload() || !account()->capabilities().bulkUpload() || _scheduleDelayedTasks || item->isEncrypted()
+        || item->_size >= _syncOptions.minChunkSize() || isInBulkUploadBlackList(item->_file)) {
+        return false;
+    }
+    if (_syncOptions._wholeUploadAge.count() > 0) {
+        const auto age = QDateTime::currentSecsSinceEpoch() - item->_modtime;
+        if (age >= -10 && age < _syncOptions._wholeUploadAge.count()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void OwncloudPropagator::setScheduleDelayedTasks(bool active)
