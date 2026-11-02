@@ -207,6 +207,7 @@ nextcloud_add_test(SingerieConflict)
 nextcloud_add_test(SingerieSocketApi)
 nextcloud_add_test(SingerieProvision)
 nextcloud_add_test(SingerieUpload)
+nextcloud_add_test(SingerieExclude)
 nextcloud_add_benchmark(LargeSync)
 
 nextcloud_add_test(Account)

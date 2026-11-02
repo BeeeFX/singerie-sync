@@ -371,6 +371,19 @@ bool ProcessDirectoryJob::handleExcluded(const QString &path, const Entries &ent
         Q_EMIT _discoveryData->seenLockedFile(_discoveryData->_localDir + path);
     }
 
+    // Singerie (A7, #8186): an item the exclusion patterns leave out, and that is gone from this PC, forgets its
+    // journal record. Kept, it made the item look deleted on this PC once the pattern went away (a mass delete on the
+    // server). Without it, the item is new again on this PC: downloaded, never deleted. An excluded item still on
+    // this PC keeps its record, so a change made to it meanwhile goes up as an ordinary change later.
+    if ((excluded == CSYNC_FILE_EXCLUDE_LIST || excluded == CSYNC_FILE_EXCLUDE_AND_REMOVE || excluded == CSYNC_FILE_SILENTLY_EXCLUDED)
+        && entries.dbEntry.isValid() && !entries.localEntry.isValid()) {
+        if (_discoveryData->_statedb->deleteFileRecord(entries.dbEntry.path(), isDirectory)) {
+            qCInfo(lcDisco) << "Excluded and gone from this PC: its journal record is forgotten, so removing the pattern later deletes nothing" << path;
+        } else {
+            qCWarning(lcDisco) << "Excluded and gone from this PC, but its journal record couldn't be forgotten" << path;
+        }
+    }
+
     if (excluded == CSYNC_NOT_EXCLUDED && !entries.localEntry.isSymLink) {
         return false;
     } else if (excluded == CSYNC_FILE_SILENTLY_EXCLUDED || excluded == CSYNC_FILE_EXCLUDE_AND_REMOVE) {
