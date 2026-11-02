@@ -483,6 +483,9 @@ CSYNC_EXCLUDE_TYPE ExcludedFiles::traversalPatternMatch(const QString &path, Ite
         bnameStr = bnameStr.mid(lastSlash + 1);
     }
 
+    // Singerie (#10108): every folder's list is asked, not only the nearest one with a list; the full-path match below
+    // runs only when one of them is triggered by the name (as upstream's single list did).
+    auto triggered = false;
     QString basePath(_localPath + path);
     while (basePath.size() > _localPath.size()) {
         basePath = leftIncludeLast(basePath, QLatin1Char('/'));
@@ -498,13 +501,19 @@ CSYNC_EXCLUDE_TYPE ExcludedFiles::traversalPatternMatch(const QString &path, Ite
         }
 
         if (!m.hasMatch()) {
-            return CSYNC_NOT_EXCLUDED;
+            // A folder's own .sync-exclude.lst adds to the lists above it (the built-in one, the user's), never
+            // switches them off: look at the next folder up instead of stopping here.
+            continue;
         }
+        triggered = true;
         if (m.capturedStart(QStringLiteral("exclude")) != -1) {
             return CSYNC_FILE_EXCLUDE_LIST;
         } else if (m.capturedStart(QStringLiteral("excluderemove")) != -1) {
             return CSYNC_FILE_EXCLUDE_AND_REMOVE;
         }
+    }
+    if (!triggered) {
+        return CSYNC_NOT_EXCLUDED;
     }
 
     // third capture: full path matching is triggered

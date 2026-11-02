@@ -306,6 +306,31 @@ private Q_SLOTS:
         QCOMPARE(check_file_traversal("latex/songbook/my_manuscript.tex.tmp"), CSYNC_FILE_EXCLUDE_LIST);
     }
 
+    void check_csync_folder_list_adds_to_the_lists_above()
+    {
+        // Singerie (#10108): a folder's own .sync-exclude.lst adds to the built-in and the user's lists, never switches
+        // them off below it (it did: matching stopped at the first folder with a list).
+        const QTemporaryDir root;
+        excludedFiles.reset(new ExcludedFiles(root.path() + "/"));
+        excludedFiles->setWildcardsMatchSlash(false);
+        excludedFiles->addManualExclude("*.lock");
+        excludedFiles->addManualExclude("*.ntp.~*~");
+        QVERIFY(QDir(root.path()).mkpath("Projects/FILM01/work"));
+        QFile list(root.path() + "/Projects/FILM01/.sync-exclude.lst");
+        QVERIFY(list.open(QFile::WriteOnly));
+        list.write("*.autosave\n");
+        list.close();
+        // The folders are met before their files, as the sync walks them.
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects", ItemTypeDirectory), CSYNC_NOT_EXCLUDED);
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects/FILM01", ItemTypeDirectory), CSYNC_NOT_EXCLUDED);
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects/FILM01/work", ItemTypeDirectory), CSYNC_NOT_EXCLUDED);
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects/FILM01/work/shot.autosave", ItemTypeFile), CSYNC_FILE_EXCLUDE_LIST);
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects/FILM01/work/shot.lock", ItemTypeFile), CSYNC_FILE_EXCLUDE_LIST);
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects/FILM01/work/comp.ntp.~3~", ItemTypeFile), CSYNC_FILE_EXCLUDE_LIST);
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects/FILM01/work/shot.blend", ItemTypeFile), CSYNC_NOT_EXCLUDED);
+        QCOMPARE(excludedFiles->traversalPatternMatch("Projects/other.autosave", ItemTypeFile), CSYNC_NOT_EXCLUDED);
+    }
+
     void check_csync_excluded_traversal()
     {
         setup_init();
