@@ -14,6 +14,7 @@
 #include "syncoptions.h"
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QJsonObject>
 #include <QObject>
 #include <QSet>
@@ -284,6 +285,16 @@ public:
     {
         return _singerieErrors;
     }
+
+    /// What moves now, within each file (Singerie's `progress`): empty when nothing moves.
+    [[nodiscard]] QJsonObject singerieProgress() const
+    {
+        return _singerieProgress;
+    }
+
+    /// The `progress` body for `pi`: the sync's bytes done and to do, its speed, and each file moving now (its path
+    /// under `root`, direction, bytes done, size, speed), at most `maxFiles` of them, the biggest first.
+    static QJsonObject singerieProgressOf(const ProgressInfo &pi, const QString &root, int maxFiles = 20);
     /// The next sync follows a server that shows this folder empty. False: it isn't held.
     bool singerieReleaseHold();
     /// The answer to a held local wipe, for the next sync: the number of files, or -1 when none is held.
@@ -656,6 +667,8 @@ private:
     int _singerieUp = 0;
     int _singerieDown = 0;
     QList<QPair<QString, QString>> _singerieErrors;
+    QJsonObject _singerieProgress;
+    QElapsedTimer _singerieProgressSent;
     QList<QPair<QString, QString>> _singerieErrorsNow;
     qint64 _singerieBinBytes = -1;
     int _singerieBinCount = -1;

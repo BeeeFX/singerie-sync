@@ -820,6 +820,7 @@ QJsonObject SocketApi::singerieStatus() const
     QJsonArray held;
     QJsonArray wipes;
     QJsonArray errors;
+    QJsonObject progress;
     qint64 lastSync = 0;
     auto up = 0;
     auto down = 0;
@@ -842,6 +843,9 @@ QJsonObject SocketApi::singerieStatus() const
         }
         for (const auto &[errorPath, message] : folder->singerieErrors()) {
             errors.append(QJsonObject{{QStringLiteral("path"), errorPath}, {QStringLiteral("message"), message}});
+        }
+        if (const auto moving = folder->singerieProgress(); !moving.isEmpty() && progress.isEmpty()) {
+            progress = moving;
         }
         lastSync = std::max(lastSync, folder->singerieLastSync());
         up += folder->singerieUp();
@@ -871,6 +875,7 @@ QJsonObject SocketApi::singerieStatus() const
         {QStringLiteral("errors"), errors},
         {QStringLiteral("held"), held},
         {QStringLiteral("local_wipes"), wipes},
+        {QStringLiteral("progress"), progress.isEmpty() ? QJsonValue() : QJsonValue(progress)},
     };
 }
 
@@ -912,6 +917,8 @@ void SocketApi::slotSingerieAccountState()
 void SocketApi::slotSingerieStatusMaybeChanged()
 {
     auto status = singerieStatus();
+    // Progress has its own event (about once a second); a status event is for a change of state.
+    status.remove(QStringLiteral("progress"));
     const auto bytes = QJsonDocument(status).toJson(QJsonDocument::Compact);
     if (bytes == _singerieLastStatus) {
         return;
@@ -938,7 +945,8 @@ void SocketApi::command_SINGERIE_HELLO(const QString &, SocketListener *listener
                                    QStringLiteral("local_wipe_held"),
                                    QStringLiteral("conflict"),
                                    QStringLiteral("bin_changed"),
-                                   QStringLiteral("credentials_failed")}},
+                                   QStringLiteral("credentials_failed"),
+                                   QStringLiteral("progress")}},
                    });
 }
 

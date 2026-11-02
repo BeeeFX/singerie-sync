@@ -36,10 +36,11 @@
 #include "common/utility_mac_sandbox.h"
 #endif
 
+#include <QDir>
+#include <QJsonArray>
+#include <QSettings>
 #include <QTimer>
 #include <QUrl>
-#include <QDir>
-#include <QSettings>
 
 #include <QMessageBox>
 #include <QPushButton>
@@ -1424,6 +1425,17 @@ void Folder::slotSyncFinished(bool success)
     // What Singerie reads (SINGERIE_STATUS and its events).
     {
         const auto folderPath = QDir::toNativeSeparators(QDir::cleanPath(path()));
+        if (!_singerieProgress.isEmpty()) {
+            // Nothing moves any more: one last progress event says so.
+            _singerieProgress = {};
+            _singerieProgressSent.invalidate();
+            Q_EMIT singerieEvent({{QStringLiteral("type"), QStringLiteral("progress")},
+                                  {QStringLiteral("folder"), folderPath},
+                                  {QStringLiteral("bytes"), 0},
+                                  {QStringLiteral("total"), 0},
+                                  {QStringLiteral("speed"), 0},
+                                  {QStringLiteral("files"), QJsonArray{}}});
+        }
         if (success) {
             _singerieLastSync = QDateTime::currentSecsSinceEpoch();
             // One-shot answers, applied by this sync.
@@ -1588,6 +1600,61 @@ void Folder::slotTransmissionProgress(const ProgressInfo &pi)
 {
     Q_EMIT progressInfo(pi);
     ProgressDispatcher::instance()->setProgressInfo(alias(), pi);
+
+    // Singerie: progress within each file (A24), pushed at most once a second, and when a file starts or ends.
+    if (pi.status() != ProgressInfo::Propagation) {
+        return;
+    }
+    auto progress = singerieProgressOf(pi, path());
+    const auto sameFiles = [](const QJsonObject &a, const QJsonObject &b) {
+        QStringList left;
+        QStringList right;
+        for (const auto &file : a.value(QStringLiteral("files")).toArray()) {
+            left.append(file.toObject().value(QStringLiteral("path")).toString());
+        }
+        for (const auto &file : b.value(QStringLiteral("files")).toArray()) {
+            right.append(file.toObject().value(QStringLiteral("path")).toString());
+        }
+        return left == right;
+    };
+    const auto due = !_singerieProgressSent.isValid() || _singerieProgressSent.elapsed() >= 1000 || !sameFiles(progress, _singerieProgress);
+    _singerieProgress = progress;
+    if (due) {
+        _singerieProgressSent.start();
+        progress.insert(QStringLiteral("type"), QStringLiteral("progress"));
+        Q_EMIT singerieEvent(progress);
+    }
+}
+
+QJsonObject Folder::singerieProgressOf(const ProgressInfo &pi, const QString &root, int maxFiles)
+{
+    QList<ProgressInfo::ProgressItem> items = pi._currentItems.values();
+    std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+        return a._item._size != b._item._size ? a._item._size > b._item._size : a._item._file < b._item._file;
+    });
+    QJsonArray files;
+    for (const auto &item : std::as_const(items)) {
+        if (files.size() >= maxFiles) {
+            break;
+        }
+        if (item._item.isDirectory()) {
+            continue;
+        }
+        files.append(QJsonObject{
+            {QStringLiteral("path"), QDir::toNativeSeparators(QDir::cleanPath(root + QLatin1Char('/') + item._item._file))},
+            {QStringLiteral("direction"), item._item._direction == SyncFileItem::Up ? QStringLiteral("up") : QStringLiteral("down")},
+            {QStringLiteral("bytes"), item._progress.completed()},
+            {QStringLiteral("total"), item._item._size},
+            {QStringLiteral("speed"), pi.fileProgress(item._item).estimatedBandwidth},
+        });
+    }
+    return {
+        {QStringLiteral("folder"), QDir::toNativeSeparators(QDir::cleanPath(root))},
+        {QStringLiteral("bytes"), pi.completedSize()},
+        {QStringLiteral("total"), pi.totalSize()},
+        {QStringLiteral("speed"), pi.totalProgress().estimatedBandwidth},
+        {QStringLiteral("files"), files},
+    };
 }
 
 // a item is completed: count the errors and forward to the ProgressDispatcher

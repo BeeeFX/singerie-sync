@@ -214,6 +214,78 @@ private Q_SLOTS:
     }
 
     /*
+     * Progress within each file (A24): pushed as `progress` events at most once a second while files move (and when a
+     * file starts or ends), listed in SINGERIE_STATUS, and one last empty event when nothing moves any more.
+     */
+    void testProgress()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.filePath(QStringLiteral("config")));
+        QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("sync")));
+        auto account = Account::create();
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        account->setUrl(QUrl(QStringLiteral("http://example.de")));
+        auto accountState = new FakeAccountState(account);
+        const auto folder = FolderMan::instance()->addFolder(accountState, folderDefinition(dir.filePath(QStringLiteral("sync"))));
+        QVERIFY(folder);
+
+        RecordingListener listener;
+        ask(QStringLiteral("SINGERIE_HELLO"), {}, listener);
+        RecordingListener subscriber;
+        ask(QStringLiteral("SINGERIE_SUBSCRIBE"), {}, subscriber);
+        QVERIFY(ask(QStringLiteral("SINGERIE_STATUS"), {}, listener).value(QStringLiteral("progress")).isNull());
+
+        SyncFileItem big;
+        big._file = QStringLiteral("Projects/FILM01/render.exr");
+        big._size = 20LL * 1024 * 1024 * 1024;
+        big._direction = SyncFileItem::Up;
+        big._instruction = CSYNC_INSTRUCTION_NEW;
+        big._type = ItemTypeFile;
+        SyncFileItem notes = big;
+        notes._file = QStringLiteral("Projects/FILM01/notes.txt");
+        notes._size = 100;
+        notes._direction = SyncFileItem::Down;
+        ProgressInfo pi;
+        pi.reset();
+        pi.adjustTotalsForFile(big);
+        pi.adjustTotalsForFile(notes);
+        pi._status = ProgressInfo::Propagation;
+        pi.setProgressItem(big, 5LL * 1024 * 1024 * 1024);
+        pi.setProgressItem(notes, 40);
+
+        const auto body = Folder::singerieProgressOf(pi, dir.filePath(QStringLiteral("sync")));
+        const auto files = body.value(QStringLiteral("files")).toArray();
+        QCOMPARE(files.size(), 2);
+        const auto first = files.first().toObject();
+        QVERIFY(first.value(QStringLiteral("path")).toString().endsWith(QStringLiteral("render.exr")));
+        QCOMPARE(first.value(QStringLiteral("direction")).toString(), QStringLiteral("up"));
+        QCOMPARE(first.value(QStringLiteral("bytes")).toInteger(), 5LL * 1024 * 1024 * 1024);
+        QCOMPARE(first.value(QStringLiteral("total")).toInteger(), 20LL * 1024 * 1024 * 1024);
+        QCOMPARE(files.at(1).toObject().value(QStringLiteral("direction")).toString(), QStringLiteral("down"));
+        QCOMPARE(body.value(QStringLiteral("total")).toInteger(), 20LL * 1024 * 1024 * 1024 + 100);
+        QCOMPARE(Folder::singerieProgressOf(pi, dir.path(), 1).value(QStringLiteral("files")).toArray().size(), 1);
+
+        // Pushed once, not again within the second for the same files; a file ending is pushed at once.
+        Q_EMIT folder->syncEngine().transmissionProgress(pi);
+        QCOMPARE(subscriber.events(QStringLiteral("progress")).size(), 1);
+        pi.setProgressItem(big, 6LL * 1024 * 1024 * 1024);
+        Q_EMIT folder->syncEngine().transmissionProgress(pi);
+        QCOMPARE(subscriber.events(QStringLiteral("progress")).size(), 1);
+        const auto status = ask(QStringLiteral("SINGERIE_STATUS"), {}, listener).value(QStringLiteral("progress")).toObject();
+        QCOMPARE(status.value(QStringLiteral("files")).toArray().first().toObject().value(QStringLiteral("bytes")).toInteger(), 6LL * 1024 * 1024 * 1024);
+        pi.setProgressComplete(notes);
+        Q_EMIT folder->syncEngine().transmissionProgress(pi);
+        QCOMPARE(subscriber.events(QStringLiteral("progress")).size(), 2);
+        QCOMPARE(subscriber.events(QStringLiteral("progress")).last().value(QStringLiteral("files")).toArray().size(), 1);
+        // No status event for progress alone.
+        const auto statusEvents = subscriber.events(QStringLiteral("status"));
+        for (const auto &event : statusEvents) {
+            QVERIFY(!event.contains(QStringLiteral("progress")));
+        }
+    }
+
+    /*
      * Invisible: the client's pop-ups go to Singerie as events; --version names the build.
      */
     void testInvisible()
