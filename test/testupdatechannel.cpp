@@ -38,6 +38,10 @@ private Q_SLOTS:
 
     void testUpdateChannel()
     {
+        if (OCC::Theme::instance()->isBranded()) {
+            // Singerie Sync (the release name) is a branded build: its channel is fixed, and it has no updater.
+            QSKIP("a branded build's update channel is fixed");
+        }
         QScopedPointer<FakeQNAM> fakeQnam(new FakeQNAM({}));
 
         // Set override for delete operation. This is needed, because by default FakeQNAM results in an
