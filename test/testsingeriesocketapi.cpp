@@ -119,6 +119,7 @@ private Q_SLOTS:
         QCOMPARE(hello.value(QStringLiteral("protocol")).toInt(), 1);
         QVERIFY(hello.value(QStringLiteral("version")).toString().contains(QStringLiteral(".sng")));
         QVERIFY(hello.value(QStringLiteral("bin")).toBool());
+        QVERIFY(hello.value(QStringLiteral("adopt")).toBool()); // another client's folder, online-only files included
 
         auto status = ask(QStringLiteral("SINGERIE_STATUS"), {}, listener);
         QVERIFY(status.contains(QStringLiteral("state")));

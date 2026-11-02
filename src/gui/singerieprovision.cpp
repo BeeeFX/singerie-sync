@@ -348,10 +348,10 @@ void SingerieProvision::addAccountAndFolder()
             fail(QStringLiteral("folder_in_other_sync_root"), QStringLiteral("The sync folder couldn't be set up there."));
             return;
         }
-        if (definition.virtualFilesMode != Vfs::Off) {
-            // Adopting a folder that already holds files keeps them as they are (Unspecified: nothing is freed);
-            // a new folder starts with everything online only.
-            folder->setRootPinState(_request.adopt ? PinState::Unspecified : PinState::OnlineOnly);
+        if (definition.virtualFilesMode != Vfs::Off && !_request.adopt) {
+            // A new folder starts with everything online only. An adopted folder keeps every file's pin as it was
+            // (setting the root's pin reaches everything below it: "always keep on this device" was lost).
+            folder->setRootPinState(PinState::OnlineOnly);
         }
         folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncWhiteList, QStringList() << QLatin1String("/"));
         qCInfo(lcSingerieProvision) << "Provisioned" << _account->displayName() << "syncing" << QDir::toNativeSeparators(_request.localPath)

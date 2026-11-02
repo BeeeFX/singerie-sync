@@ -944,7 +944,7 @@ void SocketApi::command_SINGERIE_HELLO(const QString &, SocketListener *listener
                        {QStringLiteral("protocol"), 1},
                        {QStringLiteral("version"), QStringLiteral(SINGERIE_SYNC_VERSION)},
                        {QStringLiteral("bin"), true},
-                       {QStringLiteral("adopt"), false},
+                       {QStringLiteral("adopt"), true},
                        {QStringLiteral("events"),
                         QJsonArray{QStringLiteral("status"),
                                    QStringLiteral("held"),
