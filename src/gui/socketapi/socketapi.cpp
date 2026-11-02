@@ -821,6 +821,7 @@ QJsonObject SocketApi::singerieStatus() const
     QJsonArray wipes;
     QJsonArray errors;
     QJsonObject progress;
+    QJsonArray skipped;
     qint64 lastSync = 0;
     auto up = 0;
     auto down = 0;
@@ -843,6 +844,11 @@ QJsonObject SocketApi::singerieStatus() const
         }
         for (const auto &[errorPath, message] : folder->singerieErrors()) {
             errors.append(QJsonObject{{QStringLiteral("path"), errorPath}, {QStringLiteral("message"), message}});
+        }
+        for (const auto &name : folder->singerieSkipped()) {
+            if (skipped.size() < 200) {
+                skipped.append(name);
+            }
         }
         if (const auto moving = folder->singerieProgress(); !moving.isEmpty() && progress.isEmpty()) {
             progress = moving;
@@ -876,6 +882,7 @@ QJsonObject SocketApi::singerieStatus() const
         {QStringLiteral("held"), held},
         {QStringLiteral("local_wipes"), wipes},
         {QStringLiteral("progress"), progress.isEmpty() ? QJsonValue() : QJsonValue(progress)},
+        {QStringLiteral("skipped"), skipped},
     };
 }
 
@@ -946,7 +953,8 @@ void SocketApi::command_SINGERIE_HELLO(const QString &, SocketListener *listener
                                    QStringLiteral("conflict"),
                                    QStringLiteral("bin_changed"),
                                    QStringLiteral("credentials_failed"),
-                                   QStringLiteral("progress")}},
+                                   QStringLiteral("progress"),
+                                   QStringLiteral("skipped_name")}},
                    });
 }
 

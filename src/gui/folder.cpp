@@ -37,6 +37,7 @@
 #endif
 
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QSettings>
 #include <QTimer>
@@ -53,6 +54,9 @@ namespace {
 constexpr auto versionC = "version";
 #endif
 }
+
+// csync's own test of Windows' reserved names (CON, AUX, NUL, COM1…, with any extension).
+OCSYNC_EXPORT bool csync_is_windows_reserved_word(const QStringView &filename);
 
 namespace OCC {
 
@@ -1191,6 +1195,7 @@ void Folder::startSync(const QStringList &pathList)
     _singerieHeldThisSync = false;
     _singerieWipeThisSync = false;
     _singerieErrorsNow.clear();
+    _singerieSkippedNow.clear();
     _singerieUp = 0;
     _singerieDown = 0;
     _syncResult.setStatus(SyncResult::SyncPrepare);
@@ -1451,6 +1456,7 @@ void Folder::slotSyncFinished(bool success)
             _singerieWipeSince = 0;
         }
         _singerieErrors = _singerieErrorsNow;
+        _singerieSkipped = _singerieSkippedNow;
         if (!_singerieHeldThisSync && !_singerieWipeThisSync) {
             for (const auto &message : _syncResult.errorStrings()) {
                 _singerieErrors.append({folderPath, message});
@@ -1626,6 +1632,57 @@ void Folder::slotTransmissionProgress(const ProgressInfo &pi)
     }
 }
 
+QJsonObject Folder::singerieSkippedName(const QString &root, const SyncFileItem &item)
+{
+    if (item._status != SyncFileItem::FileNameInvalid && item._status != SyncFileItem::FileNameInvalidOnServer) {
+        return {};
+    }
+    const auto relative = item.destination();
+    const auto name = relative.mid(relative.lastIndexOf(QLatin1Char('/')) + 1);
+    const auto absolute = QDir::cleanPath(root + QLatin1Char('/') + relative);
+    QString why;
+    QString renamedTo;
+    const auto trimmedEnd = [](QString text) {
+        while (!text.isEmpty() && text.back().isSpace()) {
+            text.chop(1);
+        }
+        return text;
+    };
+    if (name.endsWith(QLatin1Char(' '))) {
+        why = QStringLiteral("trailing_space");
+        const auto renamed = QDir::cleanPath(QFileInfo(absolute).absolutePath() + QLatin1Char('/') + trimmedEnd(name));
+        if (!QFileInfo::exists(absolute) && QFileInfo::exists(renamed)) {
+            renamedTo = renamed;
+        }
+    } else if (name.startsWith(QLatin1Char(' '))) {
+        why = QStringLiteral("leading_space");
+    } else if (csync_is_windows_reserved_word(name)) {
+        why = QStringLiteral("reserved");
+    } else if (name.endsWith(QLatin1Char('.'))) {
+        why = QStringLiteral("trailing_dot");
+    } else if (std::any_of(name.cbegin(), name.cend(), [](QChar c) {
+                   return QStringView(u"\\:?*\"<>|").contains(c) || c.unicode() < 32;
+               })) {
+        why = QStringLiteral("invalid_char");
+    } else if (name.size() > 255) {
+        why = QStringLiteral("too_long");
+    } else if (item._status == SyncFileItem::FileNameInvalidOnServer) {
+        why = QStringLiteral("server");
+    } else {
+        why = QStringLiteral("invalid");
+    }
+    QJsonObject body{
+        {QStringLiteral("path"), QDir::toNativeSeparators(absolute)},
+        {QStringLiteral("why"), why},
+        {QStringLiteral("message"), item._errorString},
+        {QStringLiteral("direction"), item._direction == SyncFileItem::Down ? QStringLiteral("down") : QStringLiteral("up")},
+    };
+    if (!renamedTo.isEmpty()) {
+        body.insert(QStringLiteral("renamed_to"), QDir::toNativeSeparators(renamedTo));
+    }
+    return body;
+}
+
 QJsonObject Folder::singerieProgressOf(const ProgressInfo &pi, const QString &root, int maxFiles)
 {
     QList<ProgressInfo::ProgressItem> items = pi._currentItems.values();
@@ -1683,6 +1740,19 @@ void Folder::slotItemCompleted(const SyncFileItemPtr &item, ErrorCategory errorC
         || item->_status == SyncFileItem::DetailError || item->_status == SyncFileItem::BlacklistedError;
     if (isError && _singerieErrorsNow.size() < 50) {
         _singerieErrorsNow.append({QDir::toNativeSeparators(path() + item->destination()), item->_errorString});
+    }
+    // Singerie (A30): a name this PC can't hold, or the server refuses, is never left out in silence.
+    if (auto skipped = singerieSkippedName(path(), *item); !skipped.isEmpty()) {
+        const auto where = skipped.value(QStringLiteral("path")).toString();
+        if (_singerieSkippedNow.size() < 200) {
+            _singerieSkippedNow.append(skipped);
+        }
+        if (!_singerieSkippedTold.contains(where)) {
+            _singerieSkippedTold.insert(where);
+            qCInfo(lcFolder) << "Left out for its name:" << where << skipped.value(QStringLiteral("why")).toString();
+            skipped.insert(QStringLiteral("type"), QStringLiteral("skipped_name"));
+            Q_EMIT singerieEvent(skipped);
+        }
     }
 
     _fileLog->logItem(*item);

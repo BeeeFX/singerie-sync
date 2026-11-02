@@ -295,6 +295,18 @@ public:
     /// The `progress` body for `pi`: the sync's bytes done and to do, its speed, and each file moving now (its path
     /// under `root`, direction, bytes done, size, speed), at most `maxFiles` of them, the biggest first.
     static QJsonObject singerieProgressOf(const ProgressInfo &pi, const QString &root, int maxFiles = 20);
+
+    /// The names this PC can't hold or the server refuses, found by the last sync (Singerie's `skipped`).
+    [[nodiscard]] QList<QJsonObject> singerieSkipped() const
+    {
+        return _singerieSkipped;
+    }
+
+    /// Singerie's `skipped_name` body for an item the sync left out for its name (A30): its path under `root`, why
+    /// (`reserved`, `trailing_space`, `leading_space`, `trailing_dot`, `invalid_char`, `too_long`, `server`, `invalid`),
+    /// the client's message, and `renamed_to` when the client renamed the file on this PC (a trailing space). Empty for
+    /// any other item.
+    static QJsonObject singerieSkippedName(const QString &root, const SyncFileItem &item);
     /// The next sync follows a server that shows this folder empty. False: it isn't held.
     bool singerieReleaseHold();
     /// The answer to a held local wipe, for the next sync: the number of files, or -1 when none is held.
@@ -668,6 +680,9 @@ private:
     int _singerieDown = 0;
     QList<QPair<QString, QString>> _singerieErrors;
     QJsonObject _singerieProgress;
+    QList<QJsonObject> _singerieSkipped;
+    QList<QJsonObject> _singerieSkippedNow;
+    QSet<QString> _singerieSkippedTold; ///< told once per path while the client runs
     QElapsedTimer _singerieProgressSent;
     QList<QPair<QString, QString>> _singerieErrorsNow;
     qint64 _singerieBinBytes = -1;

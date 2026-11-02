@@ -214,6 +214,67 @@ private Q_SLOTS:
     }
 
     /*
+     * A30: a name this PC can't hold (reserved, a trailing space or dot, a forbidden character) or the server refuses
+     * is told once as a `skipped_name` event with why, listed in SINGERIE_STATUS's `skipped` after the sync; a
+     * trailing space the client renamed says the new name.
+     */
+    void testSkippedNames()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.filePath(QStringLiteral("config")));
+        QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("sync/work")));
+        auto account = Account::create();
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        account->setUrl(QUrl(QStringLiteral("http://example.de")));
+        auto accountState = new FakeAccountState(account);
+        const auto folder = FolderMan::instance()->addFolder(accountState, folderDefinition(dir.filePath(QStringLiteral("sync"))));
+        QVERIFY(folder);
+        const auto root = dir.filePath(QStringLiteral("sync"));
+
+        const auto item = [](const QString &file, SyncFileItem::Status status) {
+            auto made = SyncFileItemPtr::create();
+            made->_file = file;
+            made->_instruction = CSYNC_INSTRUCTION_IGNORE;
+            made->_status = status;
+            made->_errorString = QStringLiteral("File name is a reserved name on this file system.");
+            return made;
+        };
+        const auto why = [&root, &item](const QString &file, SyncFileItem::Status status = SyncFileItem::FileNameInvalid) {
+            return Folder::singerieSkippedName(root, *item(file, status)).value(QStringLiteral("why")).toString();
+        };
+        QCOMPARE(why(QStringLiteral("work/aux.blend")), QStringLiteral("reserved"));
+        QCOMPARE(why(QStringLiteral("work/CON")), QStringLiteral("reserved"));
+        QCOMPARE(why(QStringLiteral("work/com1.txt")), QStringLiteral("reserved"));
+        QCOMPARE(why(QStringLiteral("work/notes ")), QStringLiteral("trailing_space"));
+        QCOMPARE(why(QStringLiteral("work/ notes")), QStringLiteral("leading_space"));
+        QCOMPARE(why(QStringLiteral("work/final.")), QStringLiteral("trailing_dot"));
+        QCOMPARE(why(QStringLiteral("work/a:b.txt")), QStringLiteral("invalid_char"));
+        QCOMPARE(why(QStringLiteral("work/fine.txt"), SyncFileItem::FileNameInvalidOnServer), QStringLiteral("server"));
+        QVERIFY(Folder::singerieSkippedName(root, *item(QStringLiteral("work/fine.txt"), SyncFileItem::Success)).isEmpty());
+
+        // A trailing space renamed on this PC: the new name is told.
+        {
+            QFile renamed(root + QStringLiteral("/work/notes"));
+            QVERIFY(renamed.open(QIODevice::WriteOnly));
+        }
+        const auto told = Folder::singerieSkippedName(root, *item(QStringLiteral("work/notes "), SyncFileItem::FileNameInvalid));
+        QVERIFY(told.value(QStringLiteral("renamed_to")).toString().endsWith(QStringLiteral("notes")));
+
+        RecordingListener listener;
+        ask(QStringLiteral("SINGERIE_HELLO"), {}, listener);
+        RecordingListener subscriber;
+        ask(QStringLiteral("SINGERIE_SUBSCRIBE"), {}, subscriber);
+        Q_EMIT folder->syncEngine().itemCompleted(item(QStringLiteral("work/aux.blend"), SyncFileItem::FileNameInvalid), ErrorCategory::GenericError);
+        Q_EMIT folder->syncEngine().itemCompleted(item(QStringLiteral("work/aux.blend"), SyncFileItem::FileNameInvalid), ErrorCategory::GenericError);
+        const auto events = subscriber.events(QStringLiteral("skipped_name"));
+        QCOMPARE(events.size(), 1);
+        QCOMPARE(events.first().value(QStringLiteral("why")).toString(), QStringLiteral("reserved"));
+        QVERIFY(events.first().value(QStringLiteral("path")).toString().endsWith(QStringLiteral("aux.blend")));
+        QVERIFY(ask(QStringLiteral("SINGERIE_STATUS"), {}, listener).value(QStringLiteral("skipped")).isArray());
+    }
+
+    /*
      * Progress within each file (A24): pushed as `progress` events at most once a second while files move (and when a
      * file starts or ends), listed in SINGERIE_STATUS, and one last empty event when nothing moves any more.
      */
