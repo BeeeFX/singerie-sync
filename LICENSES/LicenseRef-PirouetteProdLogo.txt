@@ -1,0 +1,8 @@
+Pirouette Prod's logo (the cloud monkey) and the Singerie Sync icons drawn from it
+
+Copyright 2026 Pirouette Prod. All rights reserved.
+
+These pictures are the collective's own art. They are not covered by the GNU General Public License that covers the
+rest of this program. They may be copied and shown only as part of Singerie Sync, unchanged, to identify it. A build
+of this program for any other purpose must use other icons (upstream's neutral state icons are in theme/*/ and the
+Nextcloud ones are under Nextcloud GmbH's trademark terms).
