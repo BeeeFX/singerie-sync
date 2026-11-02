@@ -348,6 +348,47 @@ private Q_SLOTS:
     }
 
     /*
+     * Round 3: SINGERIE_PREFETCH (Singerie's pre-download of a taken task's shot). Its fetching needs virtual files
+     * (tools/nextcloud-build/speed_check.py runs it for real); here: what it answers, and what it refuses.
+     */
+    void testPrefetchAnswers()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.filePath(QStringLiteral("config")));
+        QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("sync/shot")));
+        auto account = Account::create();
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        account->setUrl(QUrl(QStringLiteral("http://example.de")));
+        auto accountState = new FakeAccountState(account);
+        const auto folder = FolderMan::instance()->addFolder(accountState, folderDefinition(dir.filePath(QStringLiteral("sync"))));
+        QVERIFY(folder);
+
+        RecordingListener listener;
+        const auto hello = ask(QStringLiteral("SINGERIE_HELLO"), {}, listener);
+        QCOMPARE(hello.value(QStringLiteral("prefetch")).toBool(), true);
+        QVERIFY(hello.value(QStringLiteral("events")).toArray().contains(QStringLiteral("prefetch")));
+        QVERIFY(ask(QStringLiteral("SINGERIE_STATUS"), {}, listener).value(QStringLiteral("prefetch")).isArray());
+
+        QCOMPARE(ask(QStringLiteral("SINGERIE_PREFETCH"), QStringLiteral("not json"), listener).value(QStringLiteral("error")).toString(),
+                 QStringLiteral("bad_request"));
+        QCOMPARE(ask(QStringLiteral("SINGERIE_PREFETCH"), QStringLiteral("{\"paths\": []}"), listener).value(QStringLiteral("error")).toString(),
+                 QStringLiteral("bad_request"));
+        const auto outside =
+            QJsonDocument(QJsonObject{{QStringLiteral("paths"), QJsonArray{QStringLiteral("C:/elsewhere/shot")}}}).toJson(QJsonDocument::Compact);
+        QCOMPARE(ask(QStringLiteral("SINGERIE_PREFETCH"), QString::fromUtf8(outside), listener).value(QStringLiteral("error")).toString(),
+                 QStringLiteral("not_in_sync_folder"));
+        const auto inside =
+            QJsonDocument(QJsonObject{{QStringLiteral("paths"), QJsonArray{dir.filePath(QStringLiteral("sync/shot"))}}}).toJson(QJsonDocument::Compact);
+        // This folder keeps every file on the PC (no virtual files): nothing to pre-download, said so.
+        QCOMPARE(ask(QStringLiteral("SINGERIE_PREFETCH"), QString::fromUtf8(inside), listener).value(QStringLiteral("error")).toString(),
+                 QStringLiteral("no_virtual_files"));
+        QCOMPARE(ask(QStringLiteral("SINGERIE_PREFETCH_CANCEL"), QStringLiteral("nothing"), listener).value(QStringLiteral("error")).toString(),
+                 QStringLiteral("not_found"));
+        FolderMan::instance()->unloadAndDeleteAllFolders();
+    }
+
+    /*
      * Invisible: the client's pop-ups go to Singerie as events; --version names the build.
      */
     void testInvisible()
