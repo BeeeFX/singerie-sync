@@ -121,6 +121,7 @@ private Q_SLOTS:
         QVERIFY(hello.value(QStringLiteral("features")).toArray().contains(QStringLiteral("folder_holds")));
         QVERIFY(hello.value(QStringLiteral("version")).toString().contains(QStringLiteral(".sng")));
         QVERIFY(hello.value(QStringLiteral("bin")).toBool());
+        QVERIFY(hello.value(QStringLiteral("adopt")).toBool()); // another client's folder, online-only files included
 
         auto status = ask(QStringLiteral("SINGERIE_STATUS"), {}, listener);
         QVERIFY(status.contains(QStringLiteral("state")));
