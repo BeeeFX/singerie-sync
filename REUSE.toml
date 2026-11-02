@@ -139,3 +139,9 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Nextcloud GmbH and Nextcloud contributors"
 SPDX-License-Identifier = "GPL-2.0-or-later"
+
+[[annotations]]
+path = ["theme/colored/SingerieSync-icon.svg", "theme/colored/SingerieSync-w10startmenu.svg", "theme/colored/*-SingerieSync-icon.png", "theme/*/singerie/*", "theme/singeriesync.VisualElementsManifest.xml"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pirouette Prod"
+SPDX-License-Identifier = "LicenseRef-PirouetteProdLogo"

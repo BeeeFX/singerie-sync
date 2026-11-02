@@ -18,6 +18,9 @@ endif()
 set(STATE_SUBDIR "")
 if(APPLICATION_NAME STREQUAL "Nextcloud" OR APPLICATION_NAME STREQUAL "NextcloudDev")
     set(STATE_SUBDIR "nextcloud/")
+elseif(SINGERIE_RELEASE_NAME)
+    # Singerie Sync's own state icons (synced, syncing, paused, attention, error, offline, and the plain one for info).
+    set(STATE_SUBDIR "singerie/")
 endif()
 
 # Embed the call-notification ringtone only on platforms that actually play

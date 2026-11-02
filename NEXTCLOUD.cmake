@@ -17,7 +17,9 @@ else()
     set( APPLICATION_NAME       "Singerie Sync" )
     set( APPLICATION_SHORTNAME  "SingerieSync" )
     set( APPLICATION_EXECUTABLE "singeriesync" )
-    set( APPLICATION_ICON_NAME  "Nextcloud" )
+    # Its own icon: Pirouette Prod's cloud monkey (theme/colored/SingerieSync-*, the state icons in theme/*/singerie/;
+    # the collective's own art), never Nextcloud's logo.
+    set( APPLICATION_ICON_NAME  "SingerieSync" )
     set( SINGERIE_RELEASE_NAME ON )
 endif()
 
