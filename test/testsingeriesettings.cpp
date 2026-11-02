@@ -131,6 +131,25 @@ private Q_SLOTS:
     }
 
     /*
+     * Round 3: `[hydration] progressive`, the endings of the files an app may start reading while they arrive.
+     */
+    void testProgressiveEndings()
+    {
+        QTemporaryDir dir;
+        const auto path = dir.filePath(QStringLiteral("singerie.ini"));
+        SingerieSettings::setFilePathForTests(path);
+        QVERIFY(SingerieSettings::progressiveSuffixes().isEmpty());
+        write(path, "[hydration]\nprogressive=mov, MP4,bgeo.sc,.exr,a/b,\n");
+        QCOMPARE(SingerieSettings::progressiveSuffixes(), (QStringList{QStringLiteral("mov"), QStringLiteral("mp4"), QStringLiteral("bgeo.sc")}));
+        const auto endings = SingerieSettings::progressiveSuffixes();
+        QVERIFY(SingerieSettings::matchesSuffix(QStringLiteral("C:\\P\\preview_v003.MOV"), endings));
+        QVERIFY(SingerieSettings::matchesSuffix(QStringLiteral("sim.0001.bgeo.sc"), endings));
+        QVERIFY(!SingerieSettings::matchesSuffix(QStringLiteral("shot.0001.exr"), endings));
+        QVERIFY(!SingerieSettings::matchesSuffix(QStringLiteral("notamov"), endings));
+        SingerieSettings::setFilePathForTests({});
+    }
+
+    /*
      * Bulk upload: off unless Singerie turns it on, then only where the server offers it, for small files that
      * haven't changed in the last minute (a file still being written goes up in chunks, A10).
      */

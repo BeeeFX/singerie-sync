@@ -14,6 +14,7 @@
 #include "common/utility.h"
 #include "hydrationjob.h"
 #include "singerieownreads.h"
+#include "singeriesettings.h"
 #include "theme.h"
 #include "vfs_cfapi.h"
 
@@ -23,10 +24,14 @@
 #include <QFileInfo>
 #include <QFuture>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QLocalSocket>
 #include <QLoggingCategory>
+#include <QMutex>
 #include <QPromise>
 #include <QScopeGuard>
+#include <QSet>
+#include <QThread>
 #include <QUuid>
 
 #include <cfapi.h>
@@ -226,6 +231,30 @@ void cfApiSendPlaceholdersTransferInfo(const CF_CONNECTION_KEY &connectionKey,
     qCInfo(lcCfApiWrapper()) << "number of processes entries:" << opParams.TransferPlaceholders.EntriesProcessed;
 }
 
+namespace
+{
+QMutex singerieHydrationMutex;
+QHash<QString, bool> progressiveRoots; ///< sync root (clean, lower case) -> registered PROGRESSIVE
+QSet<QString> runningTransfers; ///< transfer keys being served
+
+QString rootKey(const QString &path)
+{
+    return QDir::cleanPath(QDir::fromNativeSeparators(path)).toLower();
+}
+
+void setRootProgressive(const QString &root, bool progressive)
+{
+    QMutexLocker locker(&singerieHydrationMutex);
+    progressiveRoots.insert(rootKey(root), progressive);
+}
+
+bool rootProgressive(const QString &root)
+{
+    QMutexLocker locker(&singerieHydrationMutex);
+    return progressiveRoots.value(rootKey(root), false);
+}
+}
+
 void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const CF_CALLBACK_PARAMETERS *callbackParameters)
 {
     qCDebug(lcCfApiWrapper) << "Fetch data callback called. File size:" << callbackInfo->FileSize.QuadPart;
@@ -255,6 +284,37 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
     Q_ASSERT(vfs->metaObject()->className() == QByteArrayLiteral("OCC::VfsCfApi"));
     const auto path = QString(QString::fromWCharArray(callbackInfo->VolumeDosName) + QString::fromWCharArray(callbackInfo->NormalizedPath));
     const auto requestId = QString::number(callbackInfo->TransferKey.QuadPart, 16);
+
+    qCInfo(lcCfApiWrapper) << "Fetch data range for" << path << requestId << "required" << callbackParameters->FetchData.RequiredFileOffset.QuadPart << "+"
+                           << callbackParameters->FetchData.RequiredLength.QuadPart << "optional" << callbackParameters->FetchData.OptionalFileOffset.QuadPart
+                           << "+" << callbackParameters->FetchData.OptionalLength.QuadPart;
+    // A progressive root may ask again for a later range of a file whose transfer is still running (the app read
+    // ahead of it). That transfer sends the whole file in order, so the range is coming: wait for it, don't start a
+    // second download of the same file (its request id would clash).
+    {
+        QMutexLocker locker(&singerieHydrationMutex);
+        if (runningTransfers.contains(requestId)) {
+            locker.unlock();
+            qCInfo(lcCfApiWrapper) << "A transfer of" << path << requestId << "is already running: its data covers this range";
+            for (auto waited = 0; waited < 600 * 20; ++waited) {
+                QThread::msleep(50);
+                QMutexLocker again(&singerieHydrationMutex);
+                if (!runningTransfers.contains(requestId)) {
+                    break;
+                }
+            }
+            return;
+        }
+        runningTransfers.insert(requestId);
+    }
+    const auto transferDone = qScopeGuard([requestId] {
+        QMutexLocker locker(&singerieHydrationMutex);
+        runningTransfers.remove(requestId);
+    });
+    // On a progressive root, a file whose ending isn't listed comes whole before its first read, as with FULL: its
+    // first block is held back and sent last, so a read of the beginning waits for the end.
+    const auto holdHead =
+        rootProgressive(vfs->params().filesystemPath) && !OCC::SingerieSettings::matchesSuffix(path, OCC::SingerieSettings::progressiveSuffixes());
 
     if (!callbackInfo->ProcessInfo) {
         qCCritical(lcCfApiWrapper) << "Callback parameters did not contain required process info required for the implicit hydration check, aborting" << path
@@ -362,6 +422,7 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
     constexpr auto cfapiBlockSize = 4096;
     qint64 dataOffset = 0;
     QByteArray protrudingData;
+    QByteArray heldHead; ///< the first block, sent last when the file must come whole (holdHead)
 
     const auto alignAndSendData = [&](const QByteArray &receivedData) {
         QByteArray data = protrudingData + receivedData;
@@ -373,7 +434,14 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
         const auto protudingSize = data.size() % cfapiBlockSize;
         protrudingData = data.right(protudingSize);
         data.chop(protudingSize);
-        sendTransferInfo(data, dataOffset);
+        if (holdHead && dataOffset == 0 && heldHead.isEmpty()) {
+            heldHead = data;
+        } else {
+            if (dataOffset == 0) {
+                qCInfo(lcCfApiWrapper) << "First data of" << path << requestId << "sent:" << data.size() << "bytes";
+            }
+            sendTransferInfo(data, dataOffset);
+        }
         dataOffset += data.size();
     };
 
@@ -406,7 +474,14 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
 
     if (!hydrationRequestCancelled && !protrudingData.isEmpty()) {
         qDebug(lcCfApiWrapper) << "Send remaining protruding data. Size:" << protrudingData.size();
-        sendTransferInfo(protrudingData, dataOffset);
+        if (holdHead && dataOffset == 0 && heldHead.isEmpty()) {
+            heldHead = protrudingData; // a file smaller than a block is its own head
+        } else {
+            sendTransferInfo(protrudingData, dataOffset);
+        }
+    }
+    if (!hydrationRequestCancelled && !heldHead.isEmpty()) {
+        sendTransferInfo(heldHead, 0);
     }
 
     int hydrationJobResult = OCC::HydrationJob::Status::Error;
@@ -1035,7 +1110,13 @@ OCC::Result<void, QString> OCC::CfApiWrapper::registerSyncRoot(const QString &pa
 
     CF_SYNC_POLICIES policies = {};
     policies.StructSize = sizeof(CF_SYNC_POLICIES);
-    policies.Hydration.Primary = CF_HYDRATION_POLICY_FULL;
+    // Singerie's `[hydration] progressive`: with endings listed, the root is PROGRESSIVE (an app's read returns as
+    // soon as its bytes are there) and every other file is still delivered whole before its first read (the fetch
+    // callback holds its first block back until the end). None listed: upstream's FULL.
+    const auto progressive = !OCC::SingerieSettings::progressiveSuffixes().isEmpty();
+    setRootProgressive(path, progressive);
+    qCInfo(lcCfApiWrapper) << "Hydration policy for" << path << (progressive ? "PROGRESSIVE for" : "FULL") << OCC::SingerieSettings::progressiveSuffixes();
+    policies.Hydration.Primary = progressive ? CF_HYDRATION_POLICY_PROGRESSIVE : CF_HYDRATION_POLICY_FULL;
     policies.Hydration.Modifier = CF_HYDRATION_POLICY_MODIFIER_NONE;
     policies.Population.Primary = CF_POPULATION_POLICY_PARTIAL;
     policies.Population.Modifier = CF_POPULATION_POLICY_MODIFIER_NONE;

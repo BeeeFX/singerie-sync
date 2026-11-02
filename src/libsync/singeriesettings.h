@@ -7,6 +7,7 @@
 #include "owncloudlib.h"
 
 #include <QString>
+#include <QStringList>
 
 namespace OCC
 {
@@ -21,6 +22,9 @@ namespace OCC
  *               bulkUpload                           true/false, absent = false: small files several per request
  *   [space]     keepFreeBytes                        downloads stop below this much free space; absent = the
  *                                                    OWNCLOUD_FREE_SPACE_BYTES variable or the client's 1 GB
+ *   [hydration] progressive                          file name endings (mov,mp4,vdb...): an app reading such an online-only
+ *                                                    file gets its first bytes while the rest arrives; absent = none
+ *                                                    (every file whole before the first read). Read at start.
  *   [prefetch]  parallel                             1–16, absent = 3: files Singerie's pre-download fetches at once
  *   [sync]      paused                               true/false, absent = false: no sync runs (the running one stops)
  *   [bin]       retentionDays                        1–365, absent = 30: how long the local bin keeps a file
@@ -44,6 +48,11 @@ public:
     static int transfersParallel();
     /// `[transfers] bulkUpload`: small, settled files go up several per request where the server offers it.
     static bool bulkUpload();
+
+    /// `[hydration] progressive`: the endings (lower case, no dot) of the files hydrated progressively.
+    static QStringList progressiveSuffixes();
+    /// Whether `fileName` ends with one of `suffixes` (".mov", ".bgeo.sc"...), whatever its case.
+    static bool matchesSuffix(const QString &fileName, const QStringList &suffixes);
 
     /// `[prefetch] parallel`: files the pre-download (SINGERIE_PREFETCH) fetches at once (1–16; 3 when absent).
     static int prefetchParallel();

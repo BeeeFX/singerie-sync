@@ -31,6 +31,7 @@ struct Values {
     qint64 transfersParallel = -1;
     bool bulkUpload = false;
     qint64 prefetchParallel = -1;
+    QStringList progressiveSuffixes;
     qint64 binRetentionDays = -1;
     qint64 binMaxBytes = -1;
 };
@@ -79,6 +80,12 @@ Values current()
         values.transfersParallel = readNumber(settings, QStringLiteral("transfers/parallel"));
         values.bulkUpload = settings.value(QStringLiteral("transfers/bulkUpload"), false).toBool();
         values.prefetchParallel = readNumber(settings, QStringLiteral("prefetch/parallel"));
+        for (const auto &suffix : settings.value(QStringLiteral("hydration/progressive")).toStringList()) {
+            const auto clean = suffix.trimmed().toLower();
+            if (!clean.isEmpty() && !clean.startsWith(QLatin1Char('.')) && !clean.contains(QLatin1Char('/')) && !clean.contains(QLatin1Char('\\'))) {
+                values.progressiveSuffixes.append(clean);
+            }
+        }
         values.binRetentionDays = readNumber(settings, QStringLiteral("bin/retentionDays"));
         values.binMaxBytes = readNumber(settings, QStringLiteral("bin/maxBytes"));
         qCInfo(lcSingerieSettings) << "Read" << path << "upload limit" << values.uploadLimitKBps << "download limit" << values.downloadLimitKBps << "keep free"
@@ -130,6 +137,21 @@ int SingerieSettings::transfersParallel()
 bool SingerieSettings::bulkUpload()
 {
     return current().bulkUpload;
+}
+
+QStringList SingerieSettings::progressiveSuffixes()
+{
+    return current().progressiveSuffixes;
+}
+
+bool SingerieSettings::matchesSuffix(const QString &fileName, const QStringList &suffixes)
+{
+    for (const auto &suffix : suffixes) {
+        if (fileName.endsWith(QLatin1Char('.') + suffix, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int SingerieSettings::prefetchParallel()
