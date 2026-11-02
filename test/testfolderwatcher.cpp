@@ -158,6 +158,17 @@ private Q_SLOTS:
         CHECK_WATCH_COUNT(countFolders(_rootPath) + 1);
     }
 
+    void testNotificationTestLeavesNothing()
+    {
+        // Singerie: the watcher's own notification test leaves no empty .nextcloudsync.log in the sync folder.
+        const auto testFile = _rootPath + QStringLiteral("/.nextcloudsync.log");
+        QSignalSpy unreliable(_watcher.data(), &FolderWatcher::becameUnreliable);
+        _watcher->startNotificatonTest(testFile);
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(testFile), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(testFile), 12000);
+        QCOMPARE(unreliable.count(), 0);
+    }
+
     void testACreate() { // create a new file
         QString file(_rootPath + "/foo.txt");
         QString cmd;

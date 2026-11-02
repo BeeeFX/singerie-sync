@@ -171,11 +171,19 @@ void FolderWatcher::startNotificationTestWhenReady()
     }
     FileSystem::setFileHidden(path, true);
 
-    QTimer::singleShot(5000, this, [this]() {
+    QTimer::singleShot(5000, this, [this, path]() {
         if (!_testNotificationPath.isEmpty()) {
             Q_EMIT becameUnreliable(tr("The watcher did not receive a test notification."));
         }
         _testNotificationPath.clear();
+        // Singerie: the test leaves nothing in the sync folder (an empty hidden .nextcloudsync.log stayed there for
+        // good). Only an empty file goes: older clients wrote their real log under that name.
+        if (QFileInfo(path).size() == 0 && QFile::exists(path)) {
+            FileSystem::setFileHidden(path, false);
+            if (!QFile::remove(path)) {
+                qCWarning(lcFolderWatcher()) << "Could not remove the notification test file" << path;
+            }
+        }
     });
 }
 
