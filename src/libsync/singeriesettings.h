@@ -17,6 +17,8 @@ namespace OCC
  * without restarting the client. The user can't change them in the client (it shows no settings window).
  *
  *   [transfers] uploadLimitKBps, downloadLimitKBps   0 = no limit; absent = the account's own setting
+ *               parallel                             1–32, absent = 8: files moving at once (a render's frames)
+ *               bulkUpload                           true/false, absent = false: small files several per request
  *   [space]     keepFreeBytes                        downloads stop below this much free space; absent = the
  *                                                    OWNCLOUD_FREE_SPACE_BYTES variable or the client's 1 GB
  *   [sync]      paused                               true/false, absent = false: no sync runs (the running one stops)
@@ -36,6 +38,11 @@ public:
     static qint64 uploadLimitKBps();
     static qint64 downloadLimitKBps();
     static qint64 keepFreeBytes();
+
+    /// `[transfers] parallel`: how many files move at once (1–32; 8 when absent or out of range).
+    static int transfersParallel();
+    /// `[transfers] bulkUpload`: small, settled files go up several per request where the server offers it.
+    static bool bulkUpload();
 
     /// `[sync] paused`: Singerie's Pause (Settings › Files). Replaces the folder's own `paused` key (A27).
     static bool syncPaused();

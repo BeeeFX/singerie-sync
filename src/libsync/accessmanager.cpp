@@ -15,10 +15,13 @@
 #include <QNetworkInformation>
 #include <QUuid>
 
-#include "cookiejar.h"
 #include "accessmanager.h"
 #include "common/utility.h"
+#include "cookiejar.h"
 #include "httplogger.h"
+#include "singeriesettings.h"
+
+#include <QHttp1Configuration>
 
 using namespace Qt::StringLiterals;
 
@@ -109,6 +112,12 @@ QNetworkReply *AccessManager::createRequest(QNetworkAccessManager::Operation op,
 
         newRequest.setAttribute(QNetworkRequest::Http2AllowedAttribute, http2EnabledEnv);
     }
+
+    // Qt opens at most 6 HTTP/1.1 connections per server, which capped Singerie's parallel transfers (and HTTP/2 is
+    // off by default above): room for `[transfers] parallel` files plus the listings beside them.
+    QHttp1Configuration http1;
+    http1.setNumberOfConnectionsPerHost(static_cast<qsizetype>(qBound(6, SingerieSettings::transfersParallel() + 4, 40)));
+    newRequest.setHttp1Configuration(http1);
 
     if (!newRequest.attribute(QNetworkRequest::RedirectPolicyAttribute).isValid()) {
         // We handle redirects ourselves in AbstractNetworkJob::slotFinished

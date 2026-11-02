@@ -28,6 +28,8 @@ struct Values {
     qint64 downloadLimitKBps = -1;
     qint64 keepFreeBytes = -1;
     bool syncPaused = false;
+    qint64 transfersParallel = -1;
+    bool bulkUpload = false;
     qint64 binRetentionDays = -1;
     qint64 binMaxBytes = -1;
 };
@@ -73,6 +75,8 @@ Values current()
         values.downloadLimitKBps = readNumber(settings, QStringLiteral("transfers/downloadLimitKBps"));
         values.keepFreeBytes = readNumber(settings, QStringLiteral("space/keepFreeBytes"));
         values.syncPaused = settings.value(QStringLiteral("sync/paused"), false).toBool();
+        values.transfersParallel = readNumber(settings, QStringLiteral("transfers/parallel"));
+        values.bulkUpload = settings.value(QStringLiteral("transfers/bulkUpload"), false).toBool();
         values.binRetentionDays = readNumber(settings, QStringLiteral("bin/retentionDays"));
         values.binMaxBytes = readNumber(settings, QStringLiteral("bin/maxBytes"));
         qCInfo(lcSingerieSettings) << "Read" << path << "upload limit" << values.uploadLimitKBps << "download limit" << values.downloadLimitKBps << "keep free"
@@ -111,6 +115,19 @@ qint64 SingerieSettings::downloadLimitKBps()
 qint64 SingerieSettings::keepFreeBytes()
 {
     return current().keepFreeBytes;
+}
+
+int SingerieSettings::transfersParallel()
+{
+    // 8 by default: a render's frames are many files of a few MB, where the time goes in each request's round trip,
+    // not in the bytes (round 3's bench: docs/dev/nextcloud-client.md › Speed).
+    const auto parallel = current().transfersParallel;
+    return parallel >= 1 && parallel <= 32 ? static_cast<int>(parallel) : 8;
+}
+
+bool SingerieSettings::bulkUpload()
+{
+    return current().bulkUpload;
 }
 
 bool SingerieSettings::syncPaused()
