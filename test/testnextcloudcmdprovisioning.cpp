@@ -157,8 +157,7 @@ private Q_SLOTS:
         const auto output = runCmd({}, &exitCode);
 
         QCOMPARE(exitCode, expectedExitCode);
-        QVERIFY2(output.contains("nextcloudcmd") || output.contains("nextclouddevcmd"),
-                 output.constData());
+        QVERIFY2(output.contains("nextcloudcmd") || output.contains("nextclouddevcmd") || output.contains("singeriesynccmd"), output.constData());
         QVERIFY2(output.contains("--userid"), output.constData());
     }
 
