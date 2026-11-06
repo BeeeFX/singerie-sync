@@ -15,6 +15,7 @@
 #include "folder.h"
 #include "folderman.h"
 #include "networkjobs.h"
+#include "theme.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -31,6 +32,10 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+
+// After windows.h, which they need.
+#include <cfapi.h>
+#include <sddl.h>
 #endif
 
 Q_LOGGING_CATEGORY(lcSingerieProvision, "nextcloud.gui.singerieprovision", QtInfoMsg)
@@ -71,9 +76,140 @@ bool isInSyncRoot(const QString &path)
     const auto result = info(reinterpret_cast<const wchar_t *>(native.utf16()), 0 /* CF_SYNC_ROOT_INFO_BASIC */, buffer.data(), buffer.size(), &length);
     return SUCCEEDED(result) || result == HRESULT_FROM_WIN32(ERROR_MORE_DATA);
 }
+
+constexpr auto syncRootManagerKey = R"(SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager)";
+
+/// The provider name Windows' registration of the sync root holding `path` carries (CfRegisterSyncRoot's), empty when
+/// `path` is in none.
+QString registeredProvider(const QString &path)
+{
+    using InfoFunction = HRESULT(WINAPI *)(LPCWSTR, CF_SYNC_ROOT_INFO_CLASS, PVOID, DWORD, DWORD *);
+    static const auto info = []() -> InfoFunction {
+        const auto module = LoadLibraryW(L"cldapi.dll");
+        return module ? reinterpret_cast<InfoFunction>(GetProcAddress(module, "CfGetSyncRootInfoByPath")) : nullptr;
+    }();
+    if (!info) {
+        return {};
+    }
+    QByteArray buffer(sizeof(CF_SYNC_ROOT_STANDARD_INFO) + 65536, 0);
+    DWORD length = 0;
+    const auto native = QDir::toNativeSeparators(path);
+    const auto result = info(reinterpret_cast<const wchar_t *>(native.utf16()), CF_SYNC_ROOT_INFO_STANDARD, buffer.data(), buffer.size(), &length);
+    if (FAILED(result)) {
+        return {};
+    }
+    const auto standard = reinterpret_cast<const CF_SYNC_ROOT_STANDARD_INFO *>(buffer.constData());
+    return QString::fromWCharArray(standard->ProviderName);
+}
+
+/// This Windows user's SID as text (`S-1-5-21-…`), which names its sync roots' registry keys.
+QString windowsSid()
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return {};
+    }
+    DWORD size = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+    QByteArray buffer(int(size), 0);
+    QString sid;
+    if (size > 0 && GetTokenInformation(token, TokenUser, buffer.data(), size, &size)) {
+        wchar_t *text = nullptr;
+        if (ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER *>(buffer.data())->User.Sid, &text)) {
+            sid = QString::fromWCharArray(text);
+            LocalFree(text);
+        }
+    }
+    CloseHandle(token);
+    return sid;
+}
+
+/// The sync roots' registry keys (`<provider>!<SID>!<account>!<n>`) whose folder for this user is `path`.
+QStringList syncRootKeysFor(const QString &path, const QString &sid)
+{
+    QStringList keys;
+    if (sid.isEmpty() || !Utility::registryKeyExists(HKEY_LOCAL_MACHINE, QString::fromLatin1(syncRootManagerKey))) {
+        return keys;
+    }
+    Utility::registryWalkSubKeys(HKEY_LOCAL_MACHINE, QString::fromLatin1(syncRootManagerKey), [&](HKEY, const QString &name) {
+        const auto roots = QString::fromLatin1(syncRootManagerKey) + QLatin1Char('\\') + name + QStringLiteral("\\UserSyncRoots");
+        const auto folder = Utility::registryGetKeyValue(HKEY_LOCAL_MACHINE, roots, sid).toString();
+        if (!folder.isEmpty() && samePath(folder, path)) {
+            keys.append(name);
+        }
+    });
+    return keys;
+}
+
+/// Whether `path` itself (not a folder inside it) is a sync root.
+bool isSyncRootItself(const QString &path)
+{
+    const auto parent = QFileInfo(cleanLocal(path)).absolutePath();
+    return isInSyncRoot(path) && (parent == cleanLocal(path) || !isInSyncRoot(parent));
+}
 #endif
 
 } // namespace
+
+bool SingerieProvision::isOwnSyncRoot(const QString &registeredProvider, const QStringList &keysForPath, const QString &provider, const QString &sid)
+{
+    if (registeredProvider.isEmpty() || provider.isEmpty() || sid.isEmpty() || registeredProvider != provider || keysForPath.isEmpty()) {
+        return false;
+    }
+    const auto ours = provider + QLatin1Char('!') + sid + QLatin1Char('!');
+    return std::all_of(keysForPath.cbegin(), keysForPath.cend(), [&ours](const QString &key) {
+        return key.startsWith(ours);
+    });
+}
+
+bool SingerieProvision::ownSyncRootAt(const QString &localPath)
+{
+#ifdef Q_OS_WIN
+    const auto path = cleanLocal(localPath);
+    if (!QFileInfo::exists(path) || !isSyncRootItself(path)) {
+        return false;
+    }
+    const auto sid = windowsSid();
+    return isOwnSyncRoot(registeredProvider(path), syncRootKeysFor(path, sid), Theme::instance()->appNameGUI(), sid);
+#else
+    Q_UNUSED(localPath);
+    return false;
+#endif
+}
+
+bool SingerieProvision::takeBackOwnSyncRoot(const QString &localPath)
+{
+#ifdef Q_OS_WIN
+    const auto path = cleanLocal(localPath);
+    const auto sid = windowsSid();
+    // Only ever our own root, checked again right before: another program's registration is never touched.
+    if (!ownSyncRootAt(path)) {
+        return false;
+    }
+    for (const auto &key : syncRootKeysFor(path, sid)) {
+        Utility::registryDeleteKeyTree(HKEY_LOCAL_MACHINE, QString::fromLatin1(syncRootManagerKey) + QLatin1Char('\\') + key);
+    }
+    using UnregisterFunction = HRESULT(WINAPI *)(LPCWSTR);
+    static const auto unregister = []() -> UnregisterFunction {
+        const auto module = LoadLibraryW(L"cldapi.dll");
+        return module ? reinterpret_cast<UnregisterFunction>(GetProcAddress(module, "CfUnregisterSyncRoot")) : nullptr;
+    }();
+    if (!unregister) {
+        return false;
+    }
+    const auto native = QDir::toNativeSeparators(path);
+    const auto result = unregister(reinterpret_cast<const wchar_t *>(native.utf16()));
+    if (FAILED(result)) {
+        qCWarning(lcSingerieProvision) << "Windows didn't hand the sync root back:" << Utility::formatWinError(result);
+        return false;
+    }
+    qCInfo(lcSingerieProvision) << "Took back Singerie Sync's own sync root at" << native << "(its files stay as they are)";
+    return true;
+#else
+    Q_UNUSED(localPath);
+    return false;
+#endif
+}
 
 bool SingerieProvision::parse(const QByteArray &line, Request *request, QString *error)
 {
@@ -150,7 +286,12 @@ QPair<QString, QString> SingerieProvision::checkFolder(const QString &localPath,
                 QStringLiteral("The folder is on a %1 drive; files on demand need an NTFS drive.").arg(QString::fromLatin1(storage.fileSystemType()))};
     }
     if (QFileInfo::exists(path) && isInSyncRoot(path)) {
-        return {QStringLiteral("folder_in_other_sync_root"), QStringLiteral("Another sync app still owns this folder.")};
+        // Singerie Sync's own root for this very folder (its settings lost or damaged, the folder still registered)
+        // is taken back when the folder is set up, its files as they are; any other registration stays refused.
+        if (!ownSyncRootAt(path)) {
+            return {QStringLiteral("folder_in_other_sync_root"), QStringLiteral("Another sync app still owns this folder.")};
+        }
+        adopt = true;
     }
 #endif
     const auto validity = FolderMan::instance()->checkPathValidityForNewFolder(path).first;
@@ -193,6 +334,17 @@ void SingerieProvision::fail(const QString &code, const QString &message)
 void SingerieProvision::start()
 {
     FolderMan::instance()->setSyncEnabled(false);
+    // Singerie Sync's own sync root for the folder, with no folder of ours set up there (lost or damaged settings):
+    // taken back when the folder is set up, and adopted (its files, journal and pins as they are).
+    const auto folders = FolderMan::instance()->map();
+    const auto configured = std::any_of(folders.cbegin(), folders.cend(), [this](Folder *folder) {
+        return samePath(folder->path(), _request.localPath);
+    });
+    if (!configured && ownSyncRootAt(_request.localPath)) {
+        qCInfo(lcSingerieProvision) << "The folder is still registered for Singerie Sync itself: it will be taken back, its files adopted";
+        _takeBack = true;
+        _request.adopt = true;
+    }
     const auto host = _request.server.host();
     // The same account (this server's address, or an earlier one to move from): update it.
     for (const auto &state : AccountManager::instance()->accounts()) {
@@ -360,9 +512,21 @@ void SingerieProvision::addAccountAndFolder()
                 return;
             }
         }
+        if (_takeBack && !takeBackOwnSyncRoot(_request.localPath)) {
+            AccountManager::instance()->removeAccountState(state);
+            fail(QStringLiteral("own_sync_root_stuck"), QStringLiteral("Windows didn't hand Singerie Sync's own folder back."));
+            return;
+        }
         const auto folder = folderMan->addFolder(state, definition);
         if (!folder) {
             AccountManager::instance()->removeAccountState(state);
+            if (_takeBack) {
+                // Windows handed our own folder back, then setting it up failed (SYNC-17): its online-only files have
+                // nobody to serve them until it is set up again, so say so apart (the helper tries again with adopt),
+                // never "another sync app owns this folder".
+                fail(QStringLiteral("took_back_not_set_up"), QStringLiteral("Singerie Sync took its folder back but couldn't set it up again yet."));
+                return;
+            }
             fail(QStringLiteral("folder_in_other_sync_root"), QStringLiteral("The sync folder couldn't be set up there."));
             return;
         }
@@ -380,6 +544,9 @@ void SingerieProvision::addAccountAndFolder()
         if (!_movedFrom.isEmpty()) {
             answer.insert(QStringLiteral("updated"), true);
             answer.insert(QStringLiteral("moved_from"), _movedFrom);
+        }
+        if (_takeBack) {
+            answer.insert(QStringLiteral("took_back"), true);
         }
         finish(QJsonDocument(answer).toJson(QJsonDocument::Compact), true);
     };

@@ -144,6 +144,33 @@ private Q_SLOTS:
         QCOMPARE(SingerieProvision::checkFolder(synced + QStringLiteral("/inside"), false).first, QStringLiteral("folder_in_other_sync_root"));
         FolderMan::instance()->unloadAndDeleteAllFolders();
     }
+
+    /*
+     * Singerie Sync's own sync root is told from another program's (6 November 2026: a lost settings file made
+     * provisioning refuse the folder Singerie Sync itself had registered). Only ours is ever taken back.
+     */
+    void testOwnSyncRootDecision()
+    {
+        const auto provider = QStringLiteral("Singerie Sync");
+        const auto sid = QStringLiteral("S-1-5-21-1111-2222-3333-1001");
+        const auto ours = QStringLiteral("Singerie Sync!%1!anna@files.example!0").arg(sid);
+        QVERIFY(SingerieProvision::isOwnSyncRoot(provider, {ours}, provider, sid));
+        QVERIFY(SingerieProvision::isOwnSyncRoot(provider, {ours, QStringLiteral("Singerie Sync!%1!anna@old.example!1").arg(sid)}, provider, sid));
+        // Windows' registration is another program's.
+        QVERIFY(!SingerieProvision::isOwnSyncRoot(QStringLiteral("Nextcloud"), {ours}, provider, sid));
+        // Another program's key names the folder too (the official client's, left behind).
+        QVERIFY(!SingerieProvision::isOwnSyncRoot(provider, {ours, QStringLiteral("Nextcloud!%1!anna@files.example!0").arg(sid)}, provider, sid));
+        // No key of ours names it, or only another Windows user's.
+        QVERIFY(!SingerieProvision::isOwnSyncRoot(provider, {}, provider, sid));
+        QVERIFY(!SingerieProvision::isOwnSyncRoot(provider, {QStringLiteral("Singerie Sync!S-1-5-21-9!bob@files.example!0")}, provider, sid));
+        // Not a sync root at all, or nothing to compare with.
+        QVERIFY(!SingerieProvision::isOwnSyncRoot(QString(), {ours}, provider, sid));
+        QVERIFY(!SingerieProvision::isOwnSyncRoot(provider, {ours}, provider, QString()));
+        // A plain folder is never taken for our root, and nothing is handed back for it.
+        QTemporaryDir dir;
+        QVERIFY(!SingerieProvision::ownSyncRootAt(dir.path()));
+        QVERIFY(!SingerieProvision::takeBackOwnSyncRoot(dir.path()));
+    }
 };
 
 QTEST_MAIN(TestSingerieProvision)

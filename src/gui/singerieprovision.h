@@ -29,7 +29,13 @@ class AccountState;
  *   {"ok": false, "error": "<code>", "message": "<English sentence>"}
  *
  * Codes: bad_request, bad_credentials, server_unreachable, folder_not_ntfs, folder_in_other_sync_root,
- * folder_not_empty (only without adopt), account_exists (the account already syncs several folders; one other folder is moved: "moved_from"), client_running.
+ * folder_not_empty (only without adopt), account_exists (the account already syncs several folders; one other folder is moved: "moved_from"), client_running,
+ * own_sync_root_stuck (Windows didn't hand our own sync root back).
+ *
+ * A folder Windows still registers as Singerie Sync's own sync root (this provider, this Windows user, every registry
+ * key naming the folder ours) with no folder of ours set up there (the settings lost or damaged) is taken back: its
+ * registration is removed and made again, its files adopted as they are ("took_back": true). Another program's
+ * registration is never touched (folder_in_other_sync_root).
  * The app password goes to Windows' credential store as the client keeps it; it is never logged or written anywhere
  * else. A second provision of the same account updates its app password (and its address, from replace_url_from).
  */
@@ -62,6 +68,15 @@ public:
     /// Folder checks that don't need the server, in order; empty when fine. Public for tests.
     static QPair<QString, QString> checkFolder(const QString &localPath, bool adopt);
 
+    /// Whether a sync root is Singerie Sync's own: Windows' registration names `provider`, and every registry key
+    /// naming the folder for this user is `<provider>!<sid>!…` (at least one). Public for tests.
+    static bool isOwnSyncRoot(const QString &registeredProvider, const QStringList &keysForPath, const QString &provider, const QString &sid);
+    /// Whether `localPath` itself is Singerie Sync's own sync root on this PC (isOwnSyncRoot with Windows' answers).
+    static bool ownSyncRootAt(const QString &localPath);
+    /// Hand our own sync root at `localPath` back to Windows (its registry keys and its registration; its files stay),
+    /// so it's registered again with the folder. False, and nothing touched, when it isn't ours.
+    static bool takeBackOwnSyncRoot(const QString &localPath);
+
 private:
     void finish(const QByteArray &answer, bool ok);
     void fail(const QString &code, const QString &message);
@@ -73,6 +88,7 @@ private:
     Request _request;
     AccountPtr _account;
     QString _movedFrom; ///< the folder the account synced before, when this provisioning moves it
+    bool _takeBack = false; ///< the folder is still registered as our own sync root: taken back when it's set up
 };
 
 } // namespace OCC
