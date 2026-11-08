@@ -235,8 +235,13 @@ void PropagateRemoteMkdir::slotMkcolJobFinished()
 
     _item->_fileId = _job->reply()->rawHeader("OC-FileId");
 
-    qCInfo(lcPropagateRemoteMkdir()) << "mkcol job error string:" << _item->_errorString << _job->errorString();
-    _item->_errorString = _job->errorString();
+    // A folder made (201) or already there (405) is no error: for those the job's words are the generic "An
+    // unexpected error occurred" (no HTTP error code of its own), which the item kept although it succeeded, so
+    // every folder this PC made on the server was said to have failed (Singerie's Film zero run 8).
+    if (err != QNetworkReply::NoError && _item->_httpErrorCode != 405) {
+        qCInfo(lcPropagateRemoteMkdir()) << "mkcol job error string:" << _item->_errorString << _job->errorString();
+        _item->_errorString = _job->errorString();
+    }
 
     const auto jobHttpReasonPhraseString = _job->reply()->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString();
 

@@ -157,6 +157,9 @@ private Q_SLOTS:
         QVERIFY(itemDidCompleteSuccessfully(completeSpy, "Y"));
         QVERIFY(itemDidCompleteSuccessfully(completeSpy, "Z"));
         QVERIFY(itemDidCompleteSuccessfully(completeSpy, "Z/d0"));
+        // A folder made on the server carries no error words (they were "An unexpected error occurred").
+        QCOMPARE(completeSpy.findItem("Y")->_errorString, QString());
+        QCOMPARE(completeSpy.findItem("Z")->_errorString, QString());
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
