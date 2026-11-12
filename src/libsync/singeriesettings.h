@@ -49,6 +49,9 @@ public:
     /// `[transfers] bulkUpload`: small, settled files go up several per request where the server offers it.
     static bool bulkUpload();
 
+    /// `[diagnostics] crashDumps`: keep a crash file of the client on this PC (SingerieCrash; Singerie's opt-in).
+    static bool crashDumps();
+
     /// `[hydration] progressive`: the endings (lower case, no dot) of the files hydrated progressively.
     static QStringList progressiveSuffixes();
     /// Whether `fileName` ends with one of `suffixes` (".mov", ".bgeo.sc"...), whatever its case.

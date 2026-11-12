@@ -34,6 +34,7 @@ struct Values {
     QStringList progressiveSuffixes;
     qint64 binRetentionDays = -1;
     qint64 binMaxBytes = -1;
+    bool crashDumps = false;
 };
 
 QMutex mutex;
@@ -88,6 +89,7 @@ Values current()
         }
         values.binRetentionDays = readNumber(settings, QStringLiteral("bin/retentionDays"));
         values.binMaxBytes = readNumber(settings, QStringLiteral("bin/maxBytes"));
+        values.crashDumps = settings.value(QStringLiteral("diagnostics/crashDumps"), false).toBool();
         qCInfo(lcSingerieSettings) << "Read" << path << "upload limit" << values.uploadLimitKBps << "download limit" << values.downloadLimitKBps << "keep free"
                                    << values.keepFreeBytes;
     }
@@ -137,6 +139,11 @@ int SingerieSettings::transfersParallel()
 bool SingerieSettings::bulkUpload()
 {
     return current().bulkUpload;
+}
+
+bool SingerieSettings::crashDumps()
+{
+    return current().crashDumps;
 }
 
 QStringList SingerieSettings::progressiveSuffixes()

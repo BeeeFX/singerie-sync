@@ -72,6 +72,8 @@ set(libsync_SRCS
     singeriebin.cpp
     singerieownreads.h
     singerieownreads.cpp
+    singeriecrash.h
+    singeriecrash.cpp
     abstractnetworkjob.h
     abstractnetworkjob.cpp
     networkjobs.h

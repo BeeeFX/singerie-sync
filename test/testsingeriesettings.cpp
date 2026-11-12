@@ -10,6 +10,7 @@
 #include "account.h"
 #include "common/syncjournaldb.h"
 #include "owncloudpropagator.h"
+#include "singeriecrash.h"
 #include "singeriesettings.h"
 
 #include <QFile>
@@ -58,6 +59,37 @@ private Q_SLOTS:
         QCOMPARE(SingerieSettings::downloadLimitKBps(), -1);
 
         SingerieSettings::setFilePathForTests({});
+    }
+
+    /*
+     * SYNC-M2: the crash file is opt-in (singerie.ini), and three at most are kept.
+     */
+    void testCrashFilesAreOptInAndFew()
+    {
+        QTemporaryDir dir;
+        const auto path = dir.filePath(QStringLiteral("singerie.ini"));
+        SingerieSettings::setFilePathForTests(path);
+        QCOMPARE(SingerieSettings::crashDumps(), false);
+        write(path, "[diagnostics]\ncrashDumps=true\n");
+        QCOMPARE(SingerieSettings::crashDumps(), true);
+        SingerieSettings::setFilePathForTests({});
+
+        const auto crashes = dir.filePath(QStringLiteral("crashes"));
+        QVERIFY(QDir().mkpath(crashes));
+        for (int i = 0; i < 5; ++i) {
+            QFile dump(crashes + QStringLiteral("/singeriesync-%1.dmp").arg(i));
+            QVERIFY(dump.open(QIODevice::WriteOnly));
+            dump.write("x");
+            QVERIFY(dump.flush());
+            QVERIFY(dump.setFileTime(QDateTime::currentDateTime().addSecs(i * 60), QFileDevice::FileModificationTime));
+        }
+        write(crashes + QStringLiteral("/notes.txt"), "kept");
+        const auto deleted = SingerieCrash::prune(crashes, 2);
+        QCOMPARE(deleted.size(), 3);
+        QVERIFY(QFileInfo::exists(crashes + QStringLiteral("/singeriesync-4.dmp")));
+        QVERIFY(QFileInfo::exists(crashes + QStringLiteral("/singeriesync-3.dmp")));
+        QVERIFY(!QFileInfo::exists(crashes + QStringLiteral("/singeriesync-0.dmp")));
+        QVERIFY(QFileInfo::exists(crashes + QStringLiteral("/notes.txt")));
     }
 
     void testPausedReadLive()

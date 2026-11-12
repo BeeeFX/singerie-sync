@@ -16,6 +16,7 @@
 
 #include "application.h"
 #include "singerieprovision.h"
+#include "singeriecrash.h"
 
 #include "cocoainitializer.h"
 #include "theme.h"
@@ -105,6 +106,8 @@ int main(int argc, char **argv)
 #endif
 
     OCC::Application app(argc, argv);
+    // A crash file on this PC when Singerie's member asked for one (singerie.ini, SYNC-M2); never sent.
+    OCC::SingerieCrash::install();
 
     if (!widgetsStyle.isEmpty()) {
         QApplication::setStyle(QStyleFactory::create(widgetsStyle));
