@@ -240,6 +240,12 @@ private:
     QList<QPointer<QIODevice>> _singerieSubscribers;
     QSet<SocketListener *> _singerieSubscribedListeners; ///< listeners without a socket (tests)
     static QString singerieAccountWord(const AccountState &state);
+
+public:
+    /// The tests' own pipe suffix (SINGERIE_TEST_PIPE_SUFFIX), empty otherwise.
+    static QString singerieTestPipeSuffix();
+
+private:
     QByteArray _singerieLastStatus;
     QLocalServer _localServer;
 };

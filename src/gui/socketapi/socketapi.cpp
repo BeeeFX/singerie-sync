@@ -262,7 +262,8 @@ SocketApi::SocketApi(QObject *parent)
         socketPath = QLatin1String(R"(\\.\pipe\)")
             + QLatin1String(APPLICATION_EXECUTABLE)
             + QLatin1String("-")
-            + QString::fromLocal8Bit(qgetenv("USERNAME"));
+            + QString::fromLocal8Bit(qgetenv("USERNAME"))
+            + singerieTestPipeSuffix();
         // TODO: once the windows extension supports multiple
         // client connections, switch back to the theme name
         // See issue #2388
@@ -789,6 +790,20 @@ QString singerieBinId(const SingerieBin &bin, const QString &itemId)
 }
 
 } // namespace
+
+QString SocketApi::singerieTestPipeSuffix()
+{
+    // Tests only (SINGERIE_TEST_PIPE_SUFFIX, set by the tests and build.py's test step): a test's socket API listens on
+    // a pipe of its own, never the running client's (`singeriesync-<user>`), whatever the build's name. Letters,
+    // digits, '-' and '_' only.
+    const auto suffix = qEnvironmentVariable("SINGERIE_TEST_PIPE_SUFFIX");
+    for (const auto c : suffix) {
+        if (!c.isLetterOrNumber() && c != QLatin1Char('-') && c != QLatin1Char('_')) {
+            return {};
+        }
+    }
+    return suffix;
+}
 
 void SocketApi::singerieAnswer(SocketListener *listener, const QString &name, const QJsonObject &answer) const
 {
