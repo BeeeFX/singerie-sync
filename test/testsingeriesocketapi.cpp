@@ -95,6 +95,11 @@ private Q_SLOTS:
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
+        // A pipe of the test's own, never the running client's (in a build with the release name, the running
+        // Singerie Sync's `singeriesync-<user>`).
+        if (qEnvironmentVariableIsEmpty("SINGERIE_TEST_PIPE_SUFFIX")) {
+            qputenv("SINGERIE_TEST_PIPE_SUFFIX", QByteArray(QByteArrayLiteral("-test-") + QByteArray::number(QCoreApplication::applicationPid())));
+        }
     }
 
     /*
@@ -586,8 +591,9 @@ private Q_SLOTS:
         ConfigFile::setConfDir(dir.path());
         QVERIFY(FolderMan::instance()->socketApi()); // listening
         QLocalSocket socket;
+        QVERIFY(!SocketApi::singerieTestPipeSuffix().isEmpty()); // never the running client's pipe
         socket.connectToServer(QStringLiteral(R"(\\.\pipe\)") + QStringLiteral(APPLICATION_EXECUTABLE) + QLatin1Char('-')
-                               + QString::fromLocal8Bit(qgetenv("USERNAME")));
+                               + QString::fromLocal8Bit(qgetenv("USERNAME")) + SocketApi::singerieTestPipeSuffix());
         QVERIFY(socket.waitForConnected(5000));
         socket.write("SINGERIE_HELLO:\n");
         QString answer;
